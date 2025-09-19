@@ -14,6 +14,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import redis
 import logging
+from collections import defaultdict, deque
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,6 +26,13 @@ class StreamProcessor:
         self.kafka_producer = None
         self.redis_client = None
         self.db_conn = None
+        
+        # Rate limiting
+        self.device_message_counts = defaultdict(lambda: deque(maxlen=100))
+        self.rate_limit_threshold = config.get('rate_limit', {}).get('messages_per_minute', 60)
+        
+        # Static road data for enrichment
+        self.road_segments = self._load_road_segments()
         
         # Setup MQTT callbacks
         self.mqtt_client.on_connect = self._on_mqtt_connect
@@ -85,7 +93,17 @@ class StreamProcessor:
             device_id = topic_parts[4]
             message_type = topic_parts[5]
             
-            payload = json.loads(msg.payload.decode())
+            # Rate limiting check
+            if not self._check_rate_limit(device_id):
+                logger.warning(f"Rate limit exceeded for device {device_id}")
+                return
+            
+            try:
+                payload = json.loads(msg.payload.decode())
+            except json.JSONDecodeError as e:
+                # Send to dead letter queue
+                self._send_to_dlq(msg.payload, f"Invalid JSON: {e}", device_id)
+                return
             
             # Validate and enrich message
             enriched_payload = self._validate_and_enrich(payload, message_type, device_id)
@@ -100,9 +118,13 @@ class StreamProcessor:
                 )
                 
                 logger.info(f"📨 Processed {message_type} from {device_id}")
+            else:
+                # Send invalid message to DLQ
+                self._send_to_dlq(payload, "Validation failed", device_id)
             
         except Exception as e:
             logger.error(f"✗ Message processing error: {e}")
+            self._send_to_dlq(msg.payload, f"Processing error: {e}", device_id)
     
     def _validate_and_enrich(self, payload, message_type, device_id):
         """Validate message and add enrichment data"""
@@ -149,7 +171,10 @@ class StreamProcessor:
         
         # Add enrichment
         payload['processed_at'] = datetime.utcnow().isoformat() + 'Z'
-        payload['road_segment_id'] = self._map_match(location['lat'], location['lon'])
+        road_info = self._enrich_with_road_data(location['lat'], location['lon'])
+        payload['road_segment_id'] = road_info['segment_id']
+        payload['speed_limit'] = road_info['speed_limit']
+        payload['road_type'] = road_info['road_type']
         
         # Cache latest position for geofencing
         self.redis_client.setex(
@@ -194,11 +219,73 @@ class StreamProcessor:
         
         return payload
     
-    def _map_match(self, lat, lon):
-        """Simple map matching - returns road segment ID"""
-        # Simplified implementation - in production use proper map matching service
+    def _load_road_segments(self):
+        """Load static road segment data"""
+        # Mock road segments - in production load from database/file
+        return {
+            'default': {'speed_limit': 50, 'road_type': 'urban'},
+            'highway': {'speed_limit': 100, 'road_type': 'highway'},
+            'residential': {'speed_limit': 30, 'road_type': 'residential'}
+        }
+    
+    def _check_rate_limit(self, device_id):
+        """Check if device is within rate limits"""
+        now = time.time()
+        device_times = self.device_message_counts[device_id]
+        
+        # Remove old timestamps (older than 1 minute)
+        while device_times and device_times[0] < now - 60:
+            device_times.popleft()
+        
+        # Check if under limit
+        if len(device_times) >= self.rate_limit_threshold:
+            return False
+        
+        # Add current timestamp
+        device_times.append(now)
+        return True
+    
+    def _send_to_dlq(self, payload, error_reason, device_id):
+        """Send invalid messages to dead letter queue"""
+        dlq_message = {
+            'original_payload': payload.decode() if isinstance(payload, bytes) else payload,
+            'error_reason': error_reason,
+            'device_id': device_id,
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }
+        
+        try:
+            self.kafka_producer.send(
+                'transport.dlq',
+                key=device_id,
+                value=dlq_message
+            )
+            logger.warning(f"Sent message to DLQ: {error_reason}")
+        except Exception as e:
+            logger.error(f"Failed to send to DLQ: {e}")
+    
+    def _enrich_with_road_data(self, lat, lon):
+        """Enrich telemetry with road segment information"""
+        # Simple road type detection based on coordinates
+        # In production, use proper map matching service
+        
         segment_id = f"SEG_{int(lat * 1000)}_{int(lon * 1000)}"
-        return segment_id
+        
+        # Determine road type based on location patterns
+        if abs(lat - 20.2961) < 0.01 and abs(lon - 85.8245) < 0.01:
+            road_type = 'urban'
+        elif abs(lat - 20.3) < 0.005:
+            road_type = 'highway'
+        else:
+            road_type = 'residential'
+        
+        road_info = self.road_segments.get(road_type, self.road_segments['default'])
+        
+        return {
+            'segment_id': segment_id,
+            'speed_limit': road_info['speed_limit'],
+            'road_type': road_info['road_type']
+        }
     
     def _calculate_event_severity(self, event):
         """Calculate event severity based on type and parameters"""
@@ -220,7 +307,8 @@ class StreamProcessor:
         consumers = [
             ('transport.telemetry', self._process_telemetry_batch),
             ('transport.events', self._process_events_batch),
-            ('transport.v2x', self._process_v2x_batch)
+            ('transport.v2x', self._process_v2x_batch),
+            ('transport.dlq', self._process_dlq_batch)
         ]
         
         for topic, processor in consumers:
@@ -362,6 +450,34 @@ class StreamProcessor:
         
         logger.info(f"📡 Cached {len(batch)} V2X messages")
     
+    def _process_dlq_batch(self, batch):
+        """Process dead letter queue messages for debugging"""
+        if not batch:
+            return
+        
+        cursor = self.db_conn.cursor()
+        
+        insert_query = """
+        INSERT INTO dead_letter_queue (
+            device_id, error_reason, original_payload, timestamp
+        ) VALUES %s
+        """
+        
+        values = []
+        for item in batch:
+            values.append((
+                item.get('device_id'),
+                item.get('error_reason'),
+                json.dumps(item.get('original_payload')),
+                item.get('timestamp')
+            ))
+        
+        psycopg2.extras.execute_values(cursor, insert_query, values)
+        self.db_conn.commit()
+        cursor.close()
+        
+        logger.warning(f"🚨 Stored {len(batch)} DLQ messages")
+    
     def start(self):
         """Start the stream processor"""
         logger.info("🚀 Starting Stream Processor")
@@ -397,6 +513,9 @@ if __name__ == "__main__":
             'database': 'transport_system',
             'user': 'admin',
             'password': 'password'
+        },
+        'rate_limit': {
+            'messages_per_minute': 60
         }
     }
     

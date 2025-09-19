@@ -108,11 +108,52 @@ CREATE TABLE events (
 CREATE INDEX idx_telemetry_device_time ON telemetry (device_id, time DESC);
 CREATE INDEX idx_events_device_time ON events (device_id, timestamp DESC);
 CREATE INDEX idx_toll_transactions_vehicle ON toll_transactions (vehicle_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dead_letter_queue_device ON dead_letter_queue (device_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs (user_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_driver_scores_vehicle ON driver_scores (vehicle_id, timestamp DESC);
+
+-- Add role column to users table
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user';
+
+-- Create dead letter queue table
+CREATE TABLE IF NOT EXISTS dead_letter_queue (
+    id SERIAL PRIMARY KEY,
+    device_id VARCHAR(50),
+    error_reason TEXT,
+    original_payload JSONB,
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create audit logs table
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    user_id UUID,
+    action VARCHAR(100),
+    resource_type VARCHAR(50),
+    resource_id VARCHAR(100),
+    details TEXT,
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Add confidence column to driver_scores
+ALTER TABLE driver_scores ADD COLUMN IF NOT EXISTS confidence DECIMAL(3,2) DEFAULT 0.80;
+ALTER TABLE driver_scores ADD COLUMN IF NOT EXISTS factors JSONB;
+
+-- Create model versions table for ML tracking
+CREATE TABLE IF NOT EXISTS model_versions (
+    id SERIAL PRIMARY KEY,
+    model_name VARCHAR(100),
+    version VARCHAR(20),
+    model_path TEXT,
+    metrics JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 
 -- Sample data
-INSERT INTO users (name, email, phone) VALUES 
-('John Doe', 'john@example.com', '+1234567890'),
-('Jane Smith', 'jane@example.com', '+1234567891');
+INSERT INTO users (name, email, phone, role) VALUES 
+('John Doe', 'john@example.com', '+1234567890', 'user'),
+('Jane Smith', 'jane@example.com', '+1234567891', 'user'),
+('Admin User', 'admin@example.com', '+1234567892', 'admin');
 
 INSERT INTO vehicles (user_id, registration_no, obu_device_id, wallet_address) VALUES 
 ((SELECT user_id FROM users WHERE email = 'john@example.com'), 'ABC123', 'OBU-001', '0x742d35Cc6634C0532925a3b8D4C2C4e07C3c4526'),

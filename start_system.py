@@ -78,6 +78,11 @@ class SystemManager:
         
         services = [
             {
+                "name": "Monitoring",
+                "command": "python ops/monitoring/metrics_collector.py",
+                "delay": 2
+            },
+            {
                 "name": "Stream Processor",
                 "command": "python stream_processor/processor.py",
                 "delay": 5
@@ -91,6 +96,11 @@ class SystemManager:
                 "name": "API Server",
                 "command": "python api_server/app.py",
                 "delay": 15
+            },
+            {
+                "name": "GraphQL API",
+                "command": "python api_server/graphql_api.py",
+                "delay": 18
             },
             {
                 "name": "Blockchain Service",
@@ -128,8 +138,10 @@ class SystemManager:
         
         services = [
             ("API Server", "http://localhost:5000/health"),
+            ("GraphQL API", "http://localhost:5002/graphql"),
+            ("Monitoring", "http://localhost:8000/metrics"),
             ("ML Service", "http://localhost:5001/health"),
-            ("Blockchain Service", "http://localhost:5002/health")
+            ("Blockchain Service", "http://localhost:8545")
         ]
         
         print("\n🔍 Checking service health...")
@@ -152,8 +164,10 @@ class SystemManager:
         print("📊 Web Dashboard: http://localhost:3000")
         print("🔌 API Endpoints:")
         print("   • Main API: http://localhost:5000/api/v1")
+        print("   • GraphQL API: http://localhost:5002/graphql")
+        print("   • Monitoring: http://localhost:8000/metrics")
         print("   • ML Service: http://localhost:5001")
-        print("   • Blockchain: http://localhost:5002")
+        print("   • Blockchain: http://localhost:8545")
         print("\n📡 MQTT Broker: localhost:1883")
         print("🗄️  Database: localhost:5432 (transport_system)")
         print("🔗 Blockchain: http://localhost:8545")
@@ -161,6 +175,10 @@ class SystemManager:
         print("   • GET /api/v1/vehicles - List vehicles")
         print("   • GET /api/v1/admin/dashboard - Dashboard data")
         print("   • GET /api/v1/toll/gantries - Toll gantries")
+        print("\n🛠️  Tools:")
+        print("   • Stress Test: python tools/stress_test.py --vehicles 1000")
+        print("   • Security Scan: python tools/security/security_scanner.py")
+        print("   • Telemetry Replay: python tools/telemetry_replay.py")
         print("="*60)
     
     def start_dashboard_server(self):
