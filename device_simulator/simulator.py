@@ -12,14 +12,17 @@ import math
 import threading
 from datetime import datetime
 import paho.mqtt.client as mqtt
+import requests
 import argparse
 
 class VehicleSimulator:
-    def __init__(self, device_id=None, broker_host="localhost", broker_port=1883):
+    def __init__(self, device_id=None, broker_host="localhost", broker_port=1883, mode="mqtt", api_url="http://localhost:5000"):
         self.device_id = device_id or f"OBU-{str(uuid.uuid4())[:8]}"
         self.broker_host = broker_host
         self.broker_port = broker_port
-        self.client = mqtt.Client()
+        self.mode = mode
+        self.api_url = api_url
+        self.client = mqtt.Client() if mode == "mqtt" else None
         self.running = False
         
         # Vehicle state
@@ -38,8 +41,9 @@ class VehicleSimulator:
         self.current_route_index = 0
         
         # Setup MQTT callbacks
-        self.client.on_connect = self._on_connect
-        self.client.on_disconnect = self._on_disconnect
+        if self.client:
+            self.client.on_connect = self._on_connect
+            self.client.on_disconnect = self._on_disconnect
         
     def _generate_route(self):
         """Generate a simple route with waypoints"""
@@ -62,20 +66,34 @@ class VehicleSimulator:
         print(f"✗ Device {self.device_id} disconnected from MQTT broker")
     
     def connect(self):
-        """Connect to MQTT broker"""
-        try:
-            self.client.connect(self.broker_host, self.broker_port, 60)
-            self.client.loop_start()
-            return True
-        except Exception as e:
-            print(f"✗ Connection failed: {e}")
-            return False
+        """Connect to MQTT broker or test HTTP endpoint"""
+        if self.mode == "http":
+            try:
+                response = requests.get(f"{self.api_url}/health", timeout=5)
+                if response.status_code == 200:
+                    print(f"✓ Device {self.device_id} connected to HTTP API")
+                    return True
+                else:
+                    print(f"✗ HTTP API not available: {response.status_code}")
+                    return False
+            except Exception as e:
+                print(f"✗ HTTP connection failed: {e}")
+                return False
+        else:
+            try:
+                self.client.connect(self.broker_host, self.broker_port, 60)
+                self.client.loop_start()
+                return True
+            except Exception as e:
+                print(f"✗ MQTT connection failed: {e}")
+                return False
     
     def disconnect(self):
         """Disconnect from MQTT broker"""
         self.running = False
-        self.client.loop_stop()
-        self.client.disconnect()
+        if self.client:
+            self.client.loop_stop()
+            self.client.disconnect()
     
     def _update_position(self):
         """Update vehicle position along route"""
@@ -145,33 +163,55 @@ class VehicleSimulator:
             else:
                 accel_x = random.uniform(5, 8)   # Harsh acceleration
         
-        return {
-            "deviceId": self.device_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "location": {
-                "lat": round(self.latitude, 8),
-                "lon": round(self.longitude, 8),
-                "hdop": round(random.uniform(0.5, 1.5), 1),
-                "alt": round(random.uniform(20, 30), 1)
-            },
-            "speedKmph": round(self.speed, 1),
-            "heading": round(self.heading, 1),
-            "imu": {
-                "ax": round(accel_x, 3),
-                "ay": round(accel_y, 3),
-                "az": round(accel_z, 3),
-                "gx": round(random.uniform(-0.01, 0.01), 4),
-                "gy": round(random.uniform(-0.01, 0.01), 4),
-                "gz": round(random.uniform(-0.01, 0.01), 4)
-            },
-            "can": {
-                "rpm": int(self.rpm),
-                "throttle": round(self.throttle, 1),
-                "brake": round(self.brake, 1)
-            },
-            "batteryVoltage": round(self.battery_voltage, 2),
-            "signature": "mock_signature_" + str(uuid.uuid4())[:16]
-        }
+        # Calculate jerk (rate of change of acceleration)
+        jerk = random.uniform(-0.5, 0.5)
+        if abs(accel_x) > 3:  # High acceleration events have higher jerk
+            jerk = random.uniform(-2, 2)
+        
+        # Generate yaw rate
+        yaw = random.uniform(-0.1, 0.1)
+        
+        if self.mode == "http":
+            # Simplified format for HTTP API
+            return {
+                "device_id": self.device_id,
+                "timestamp": int(datetime.utcnow().timestamp()),
+                "speed": round(self.speed, 1),
+                "accel_x": round(accel_x, 3),
+                "accel_y": round(accel_y, 3),
+                "accel_z": round(accel_z, 3),
+                "jerk": round(jerk, 3),
+                "yaw": round(yaw, 4)
+            }
+        else:
+            # Full MQTT format
+            return {
+                "deviceId": self.device_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "location": {
+                    "lat": round(self.latitude, 8),
+                    "lon": round(self.longitude, 8),
+                    "hdop": round(random.uniform(0.5, 1.5), 1),
+                    "alt": round(random.uniform(20, 30), 1)
+                },
+                "speedKmph": round(self.speed, 1),
+                "heading": round(self.heading, 1),
+                "imu": {
+                    "ax": round(accel_x, 3),
+                    "ay": round(accel_y, 3),
+                    "az": round(accel_z, 3),
+                    "gx": round(random.uniform(-0.01, 0.01), 4),
+                    "gy": round(random.uniform(-0.01, 0.01), 4),
+                    "gz": round(random.uniform(-0.01, 0.01), 4)
+                },
+                "can": {
+                    "rpm": int(self.rpm),
+                    "throttle": round(self.throttle, 1),
+                    "brake": round(self.brake, 1)
+                },
+                "batteryVoltage": round(self.battery_voltage, 2),
+                "signature": "mock_signature_" + str(uuid.uuid4())[:16]
+            }
     
     def _check_events(self, telemetry):
         """Check for driving events and publish them"""
@@ -207,14 +247,31 @@ class VehicleSimulator:
                 
                 # Generate and publish telemetry
                 telemetry = self._generate_telemetry()
-                topic = f"/org/demo/device/{self.device_id}/telemetry"
                 
-                result = self.client.publish(topic, json.dumps(telemetry))
-                if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                    print(f"📡 {self.device_id}: Speed {telemetry['speedKmph']} km/h at ({telemetry['location']['lat']:.6f}, {telemetry['location']['lon']:.6f})")
-                
-                # Check for events
-                self._check_events(telemetry)
+                if self.mode == "http":
+                    # Send via HTTP POST
+                    try:
+                        response = requests.post(
+                            f"{self.api_url}/driver_score",
+                            json=telemetry,
+                            timeout=5
+                        )
+                        if response.status_code == 200:
+                            result = response.json()
+                            print(f"📡 {self.device_id}: Speed {telemetry['speed']} km/h -> Score: {result.get('driver_score', 'N/A'):.1f} ({result.get('model', 'unknown')})")
+                        else:
+                            print(f"❌ {self.device_id}: HTTP error {response.status_code}")
+                    except Exception as e:
+                        print(f"❌ {self.device_id}: HTTP request failed: {e}")
+                else:
+                    # Send via MQTT
+                    topic = f"/org/demo/device/{self.device_id}/telemetry"
+                    result = self.client.publish(topic, json.dumps(telemetry))
+                    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                        print(f"📡 {self.device_id}: Speed {telemetry['speedKmph']} km/h at ({telemetry['location']['lat']:.6f}, {telemetry['location']['lon']:.6f})")
+                    
+                    # Check for events (MQTT only)
+                    self._check_events(telemetry)
                 
                 time.sleep(interval)
                 
@@ -225,15 +282,15 @@ class VehicleSimulator:
                 print(f"✗ Error in simulation: {e}")
                 time.sleep(1)
 
-def simulate_multiple_vehicles(count=3, broker_host="localhost"):
+def simulate_multiple_vehicles(count=3, broker_host="localhost", mode="mqtt", api_url="http://localhost:5000"):
     """Simulate multiple vehicles"""
     simulators = []
     threads = []
     
-    print(f"🚗 Starting {count} vehicle simulators...")
+    print(f"🚗 Starting {count} vehicle simulators in {mode} mode...")
     
     for i in range(count):
-        sim = VehicleSimulator(broker_host=broker_host)
+        sim = VehicleSimulator(broker_host=broker_host, mode=mode, api_url=api_url)
         if sim.connect():
             simulators.append(sim)
             
@@ -260,17 +317,30 @@ def simulate_multiple_vehicles(count=3, broker_host="localhost"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Vehicle Edge Simulator")
     parser.add_argument("--broker", default="localhost", help="MQTT broker host")
-    parser.add_argument("--count", type=int, default=3, help="Number of vehicles to simulate")
+    parser.add_argument("--devices", type=int, default=3, help="Number of vehicles to simulate")
+    parser.add_argument("--interval", type=float, default=1.0, help="Telemetry interval in seconds")
+    parser.add_argument("--mode", choices=["mqtt", "http"], default="http", help="Communication mode")
+    parser.add_argument("--api-url", default="http://localhost:5000", help="API server URL for HTTP mode")
     parser.add_argument("--device-id", help="Specific device ID (single vehicle mode)")
     
     args = parser.parse_args()
     
     if args.device_id:
         # Single vehicle mode
-        sim = VehicleSimulator(device_id=args.device_id, broker_host=args.broker)
+        sim = VehicleSimulator(
+            device_id=args.device_id, 
+            broker_host=args.broker, 
+            mode=args.mode, 
+            api_url=args.api_url
+        )
         if sim.connect():
-            sim.start_simulation()
+            sim.start_simulation(args.interval)
         sim.disconnect()
     else:
         # Multi-vehicle mode
-        simulate_multiple_vehicles(args.count, args.broker)
+        simulate_multiple_vehicles(
+            args.devices, 
+            args.broker, 
+            args.mode, 
+            args.api_url
+        )

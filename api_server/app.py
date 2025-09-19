@@ -13,6 +13,7 @@ from psycopg2.extras import RealDictCursor
 import redis
 import json
 import uuid
+import os
 from datetime import datetime, timedelta
 import hashlib
 import requests
@@ -20,6 +21,7 @@ import logging
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ml_services.driver_score import predict_score
+from db import db_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -513,17 +515,44 @@ def driver_score():
         if telemetry is None:
             return jsonify({"error": "invalid json"}), 400
         
-        out = predict_score(telemetry)
+        # Validate required fields
+        required_fields = ['device_id', 'timestamp']
+        for field in required_fields:
+            if field not in telemetry:
+                return jsonify({"error": f"missing field: {field}"}), 400
+        
+        # Get driver score from ML service
+        score_result = predict_score(telemetry)
+        
+        # Store in database
+        try:
+            db_manager.insert_telemetry_and_score(telemetry, score_result)
+        except Exception as db_error:
+            logger.warning(f"Database storage failed: {db_error}")
+        
         response = {
             "device_id": telemetry.get("device_id"),
             "timestamp": telemetry.get("timestamp"),
-            "driver_score": out["score"],
-            "model": out["model"]
+            "driver_score": score_result["score"],
+            "model": score_result["model"]
         }
         return jsonify(response)
     except Exception as e:
         logger.exception("driver_score error")
         return jsonify({"error": "internal error", "detail": str(e)}), 500
+
+@app.route('/scores', methods=['GET'])
+def get_scores():
+    """Get recent driver scores"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        limit = min(limit, 100)  # Cap at 100
+        
+        scores = db_manager.get_recent_scores(limit)
+        return jsonify({"scores": scores, "count": len(scores)})
+    except Exception as e:
+        logger.exception("get_scores error")
+        return jsonify({"error": "failed to get scores", "detail": str(e)}), 500
 
 # Health check
 @app.route('/health', methods=['GET'])
@@ -536,4 +565,11 @@ def health():
     })
 
 if __name__ == "__main__":
+    # Initialize database connection
+    try:
+        db_manager.connect()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+    
     app.run(host='0.0.0.0', port=5000, debug=True)

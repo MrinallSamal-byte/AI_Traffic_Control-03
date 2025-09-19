@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Driver Score Dashboard - Prototype</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .scores-container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .scores-header {
+            background: #667eea;
+            color: white;
+            padding: 15px 20px;
+            font-weight: bold;
+        }
+        .score-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            border-bottom: 1px solid #eee;
+        }
+        .score-item:last-child {
+            border-bottom: none;
+        }
+        .device-info {
+            flex: 1;
+        }
+        .device-id {
+            font-weight: bold;
+            color: #333;
+        }
+        .timestamp {
+            font-size: 0.9em;
+            color: #666;
+        }
+        .score-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            color: white;
+            font-weight: bold;
+            min-width: 60px;
+            text-align: center;
+        }
+        .score-excellent { background-color: #4CAF50; }
+        .score-good { background-color: #8BC34A; }
+        .score-fair { background-color: #FFC107; }
+        .score-poor { background-color: #FF9800; }
+        .score-dangerous { background-color: #F44336; }
+        .model-tag {
+            font-size: 0.8em;
+            background: #e0e0e0;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: 10px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .refresh-info {
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚗 Driver Score Dashboard</h1>
+            <p>Real-time driver risk scoring prototype</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="totalScores">-</div>
+                <div>Total Scores</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="activeDevices">-</div>
+                <div>Active Devices</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="avgScore">-</div>
+                <div>Average Score</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="lastUpdate">-</div>
+                <div>Last Update</div>
+            </div>
+        </div>
+
+        <div class="scores-container">
+            <div class="scores-header">
+                Recent Driver Scores
+            </div>
+            <div id="scoresContent">
+                <div class="loading">Loading scores...</div>
+            </div>
+        </div>
+
+        <div class="refresh-info">
+            Auto-refreshing every 2 seconds
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000';
+        let lastUpdateTime = null;
+
+        function getScoreClass(score) {
+            if (score >= 80) return 'score-excellent';
+            if (score >= 60) return 'score-good';
+            if (score >= 40) return 'score-fair';
+            if (score >= 20) return 'score-poor';
+            return 'score-dangerous';
+        }
+
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleTimeString();
+        }
+
+        function updateStats(scores) {
+            const totalScores = scores.length;
+            const uniqueDevices = new Set(scores.map(s => s.device_id)).size;
+            const avgScore = scores.length > 0 ? 
+                (scores.reduce((sum, s) => sum + s.score, 0) / scores.length).toFixed(1) : 0;
+            
+            document.getElementById('totalScores').textContent = totalScores;
+            document.getElementById('activeDevices').textContent = uniqueDevices;
+            document.getElementById('avgScore').textContent = avgScore;
+            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+        }
+
+        function renderScores(scores) {
+            const container = document.getElementById('scoresContent');
+            
+            if (scores.length === 0) {
+                container.innerHTML = '<div class="loading">No scores available yet</div>';
+                return;
+            }
+
+            const html = scores.map(score => `
+                <div class="score-item">
+                    <div class="device-info">
+                        <div class="device-id">${score.device_id}</div>
+                        <div class="timestamp">${formatTimestamp(score.ts)}</div>
+                    </div>
+                    <div>
+                        <span class="score-badge ${getScoreClass(score.score)}">${score.score.toFixed(1)}</span>
+                        <span class="model-tag">${score.model}</span>
+                    </div>
+                </div>
+            `).join('');
+
+            container.innerHTML = html;
+        }
+
+        async function fetchScores() {
+            try {
+                const response = await fetch(`${API_BASE}/scores?limit=50`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                
+                updateStats(data.scores);
+                renderScores(data.scores);
+                
+                // Remove any error messages
+                const existingError = document.querySelector('.error');
+                if (existingError) {
+                    existingError.remove();
+                }
+            } catch (error) {
+                console.error('Failed to fetch scores:', error);
+                
+                // Show error message
+                let errorDiv = document.querySelector('.error');
+                if (!errorDiv) {
+                    errorDiv = document.createElement('div');
+                    errorDiv.className = 'error';
+                    document.querySelector('.container').insertBefore(errorDiv, document.querySelector('.scores-container'));
+                }
+                errorDiv.textContent = `Failed to fetch data: ${error.message}. Make sure the API server is running on ${API_BASE}`;
+            }
+        }
+
+        // Initial load
+        fetchScores();
+
+        // Auto-refresh every 2 seconds
+        setInterval(fetchScores, 2000);
+    </script>
+</body>
+</html>

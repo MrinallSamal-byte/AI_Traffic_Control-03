@@ -39,6 +39,7 @@ tenacity==8.2.3
 pytest==7.4.2
 black==23.7.0
 flake8==6.0.0
+requests==2.31.0
 
 # New dependencies for enhanced features
 graphene==3.3
