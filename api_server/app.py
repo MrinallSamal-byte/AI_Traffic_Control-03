@@ -514,6 +514,10 @@ def driver_score():
         telemetry = request.get_json(force=True)
         if telemetry is None:
             return jsonify({"error": "invalid json"}), 400
+    except Exception as json_error:
+        return jsonify({"error": "invalid json"}), 400
+    
+    try:
         
         # Validate required fields
         required_fields = ['device_id', 'timestamp']
