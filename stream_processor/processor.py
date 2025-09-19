@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+"""
+Stream Processor - MQTT to Kafka to Database Pipeline
+Handles real-time telemetry validation, enrichment, and routing
+"""
+
+import json
+import time
+import threading
+from datetime import datetime
+import paho.mqtt.client as mqtt
+from kafka import KafkaProducer, KafkaConsumer
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import redis
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class StreamProcessor:
+    def __init__(self, config):
+        self.config = config
+        self.mqtt_client = mqtt.Client()
+        self.kafka_producer = None
+        self.redis_client = None
+        self.db_conn = None
+        
+        # Setup MQTT callbacks
+        self.mqtt_client.on_connect = self._on_mqtt_connect
+        self.mqtt_client.on_message = self._on_mqtt_message
+        
+        self._setup_connections()
+    
+    def _setup_connections(self):
+        """Initialize all connections"""
+        try:
+            # Kafka Producer
+            self.kafka_producer = KafkaProducer(
+                bootstrap_servers=self.config['kafka']['servers'],
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                key_serializer=lambda k: k.encode('utf-8') if k else None
+            )
+            
+            # Redis
+            self.redis_client = redis.Redis(
+                host=self.config['redis']['host'],
+                port=self.config['redis']['port'],
+                decode_responses=True
+            )
+            
+            # PostgreSQL
+            self.db_conn = psycopg2.connect(
+                host=self.config['postgres']['host'],
+                port=self.config['postgres']['port'],
+                database=self.config['postgres']['database'],
+                user=self.config['postgres']['user'],
+                password=self.config['postgres']['password']
+            )
+            
+            logger.info("✓ All connections established")
+            
+        except Exception as e:
+            logger.error(f"✗ Connection setup failed: {e}")
+            raise
+    
+    def _on_mqtt_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            logger.info("✓ Connected to MQTT broker")
+            # Subscribe to all telemetry and events
+            client.subscribe("/org/+/device/+/telemetry")
+            client.subscribe("/org/+/device/+/events")
+            client.subscribe("/org/+/device/+/v2x")
+        else:
+            logger.error(f"✗ MQTT connection failed: {rc}")
+    
+    def _on_mqtt_message(self, client, userdata, msg):
+        """Process incoming MQTT messages"""
+        try:
+            topic_parts = msg.topic.split('/')
+            if len(topic_parts) < 5:
+                return
+            
+            org_id = topic_parts[2]
+            device_id = topic_parts[4]
+            message_type = topic_parts[5]
+            
+            payload = json.loads(msg.payload.decode())
+            
+            # Validate and enrich message
+            enriched_payload = self._validate_and_enrich(payload, message_type, device_id)
+            
+            if enriched_payload:
+                # Route to appropriate Kafka topic
+                kafka_topic = f"transport.{message_type}"
+                self.kafka_producer.send(
+                    kafka_topic,
+                    key=device_id,
+                    value=enriched_payload
+                )
+                
+                logger.info(f"📨 Processed {message_type} from {device_id}")
+            
+        except Exception as e:
+            logger.error(f"✗ Message processing error: {e}")
+    
+    def _validate_and_enrich(self, payload, message_type, device_id):
+        """Validate message and add enrichment data"""
+        try:
+            # Basic validation
+            if not payload.get('timestamp'):
+                payload['timestamp'] = datetime.utcnow().isoformat() + 'Z'
+            
+            if not payload.get('deviceId'):
+                payload['deviceId'] = device_id
+            
+            # Message type specific validation
+            if message_type == 'telemetry':
+                return self._validate_telemetry(payload)
+            elif message_type == 'events':
+                return self._validate_event(payload)
+            elif message_type == 'v2x':
+                return self._validate_v2x(payload)
+            
+            return payload
+            
+        except Exception as e:
+            logger.error(f"✗ Validation error: {e}")
+            return None
+    
+    def _validate_telemetry(self, payload):
+        """Validate telemetry message"""
+        required_fields = ['deviceId', 'timestamp', 'location', 'speedKmph']
+        
+        for field in required_fields:
+            if field not in payload:
+                logger.warning(f"Missing required field: {field}")
+                return None
+        
+        # Validate location
+        location = payload.get('location', {})
+        if not (-90 <= location.get('lat', 0) <= 90):
+            logger.warning("Invalid latitude")
+            return None
+        
+        if not (-180 <= location.get('lon', 0) <= 180):
+            logger.warning("Invalid longitude")
+            return None
+        
+        # Add enrichment
+        payload['processed_at'] = datetime.utcnow().isoformat() + 'Z'
+        payload['road_segment_id'] = self._map_match(location['lat'], location['lon'])
+        
+        # Cache latest position for geofencing
+        self.redis_client.setex(
+            f"position:{payload['deviceId']}",
+            300,  # 5 minutes TTL
+            json.dumps({
+                'lat': location['lat'],
+                'lon': location['lon'],
+                'timestamp': payload['timestamp']
+            })
+        )
+        
+        return payload
+    
+    def _validate_event(self, payload):
+        """Validate event message"""
+        required_fields = ['eventType', 'deviceId', 'timestamp']
+        
+        for field in required_fields:
+            if field not in payload:
+                logger.warning(f"Missing required field: {field}")
+                return None
+        
+        # Add enrichment
+        payload['processed_at'] = datetime.utcnow().isoformat() + 'Z'
+        payload['severity'] = self._calculate_event_severity(payload)
+        
+        return payload
+    
+    def _validate_v2x(self, payload):
+        """Validate V2X message"""
+        required_fields = ['type', 'deviceId', 'pos']
+        
+        for field in required_fields:
+            if field not in payload:
+                logger.warning(f"Missing required field: {field}")
+                return None
+        
+        # Add enrichment
+        payload['processed_at'] = datetime.utcnow().isoformat() + 'Z'
+        payload['ttl_expires_at'] = datetime.utcnow().timestamp() + payload.get('ttl_seconds', 5)
+        
+        return payload
+    
+    def _map_match(self, lat, lon):
+        """Simple map matching - returns road segment ID"""
+        # Simplified implementation - in production use proper map matching service
+        segment_id = f"SEG_{int(lat * 1000)}_{int(lon * 1000)}"
+        return segment_id
+    
+    def _calculate_event_severity(self, event):
+        """Calculate event severity based on type and parameters"""
+        event_type = event.get('eventType', '')
+        
+        if event_type in ['HARSH_BRAKE', 'HARSH_ACCEL']:
+            accel_peak = abs(event.get('accelPeak', 0))
+            if accel_peak > 8:
+                return 'HIGH'
+            elif accel_peak > 6:
+                return 'MEDIUM'
+            else:
+                return 'LOW'
+        
+        return 'LOW'
+    
+    def start_kafka_consumers(self):
+        """Start Kafka consumers for database persistence"""
+        consumers = [
+            ('transport.telemetry', self._process_telemetry_batch),
+            ('transport.events', self._process_events_batch),
+            ('transport.v2x', self._process_v2x_batch)
+        ]
+        
+        for topic, processor in consumers:
+            thread = threading.Thread(
+                target=self._kafka_consumer_loop,
+                args=(topic, processor)
+            )
+            thread.daemon = True
+            thread.start()
+            logger.info(f"✓ Started consumer for {topic}")
+    
+    def _kafka_consumer_loop(self, topic, processor):
+        """Kafka consumer loop"""
+        consumer = KafkaConsumer(
+            topic,
+            bootstrap_servers=self.config['kafka']['servers'],
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            group_id=f"stream_processor_{topic}",
+            auto_offset_reset='latest'
+        )
+        
+        batch = []
+        batch_size = 100
+        last_commit = time.time()
+        
+        for message in consumer:
+            batch.append(message.value)
+            
+            # Process batch when full or after timeout
+            if len(batch) >= batch_size or (time.time() - last_commit) > 5:
+                try:
+                    processor(batch)
+                    batch = []
+                    last_commit = time.time()
+                    consumer.commit()
+                except Exception as e:
+                    logger.error(f"✗ Batch processing error: {e}")
+    
+    def _process_telemetry_batch(self, batch):
+        """Process telemetry batch to database"""
+        if not batch:
+            return
+        
+        cursor = self.db_conn.cursor()
+        
+        insert_query = """
+        INSERT INTO telemetry (
+            time, device_id, latitude, longitude, speed_kmph, heading,
+            acceleration_x, acceleration_y, acceleration_z,
+            gyro_x, gyro_y, gyro_z, rpm, throttle, brake,
+            battery_voltage, signature
+        ) VALUES %s
+        """
+        
+        values = []
+        for item in batch:
+            location = item.get('location', {})
+            imu = item.get('imu', {})
+            can = item.get('can', {})
+            
+            values.append((
+                item.get('timestamp'),
+                item.get('deviceId'),
+                location.get('lat'),
+                location.get('lon'),
+                item.get('speedKmph'),
+                item.get('heading'),
+                imu.get('ax'),
+                imu.get('ay'),
+                imu.get('az'),
+                imu.get('gx'),
+                imu.get('gy'),
+                imu.get('gz'),
+                can.get('rpm'),
+                can.get('throttle'),
+                can.get('brake'),
+                item.get('batteryVoltage'),
+                item.get('signature')
+            ))
+        
+        psycopg2.extras.execute_values(cursor, insert_query, values)
+        self.db_conn.commit()
+        cursor.close()
+        
+        logger.info(f"💾 Stored {len(batch)} telemetry records")
+    
+    def _process_events_batch(self, batch):
+        """Process events batch to database"""
+        if not batch:
+            return
+        
+        cursor = self.db_conn.cursor()
+        
+        insert_query = """
+        INSERT INTO events (
+            device_id, event_type, timestamp, latitude, longitude,
+            speed_before, speed_after, accel_peak, metadata
+        ) VALUES %s
+        """
+        
+        values = []
+        for item in batch:
+            location = item.get('location', {})
+            
+            values.append((
+                item.get('deviceId'),
+                item.get('eventType'),
+                item.get('timestamp'),
+                location.get('lat'),
+                location.get('lon'),
+                item.get('speedBefore'),
+                item.get('speedAfter'),
+                item.get('accelPeak'),
+                json.dumps({k: v for k, v in item.items() if k not in [
+                    'deviceId', 'eventType', 'timestamp', 'location',
+                    'speedBefore', 'speedAfter', 'accelPeak'
+                ]})
+            ))
+        
+        psycopg2.extras.execute_values(cursor, insert_query, values)
+        self.db_conn.commit()
+        cursor.close()
+        
+        logger.info(f"🚨 Stored {len(batch)} event records")
+    
+    def _process_v2x_batch(self, batch):
+        """Process V2X messages (cache for real-time access)"""
+        if not batch:
+            return
+        
+        for item in batch:
+            # Store in Redis for real-time V2X message exchange
+            key = f"v2x:{item.get('deviceId')}:{item.get('type')}"
+            self.redis_client.setex(
+                key,
+                item.get('ttl_seconds', 5),
+                json.dumps(item)
+            )
+        
+        logger.info(f"📡 Cached {len(batch)} V2X messages")
+    
+    def start(self):
+        """Start the stream processor"""
+        logger.info("🚀 Starting Stream Processor")
+        
+        # Start Kafka consumers
+        self.start_kafka_consumers()
+        
+        # Connect to MQTT and start processing
+        self.mqtt_client.connect(
+            self.config['mqtt']['host'],
+            self.config['mqtt']['port'],
+            60
+        )
+        
+        self.mqtt_client.loop_forever()
+
+if __name__ == "__main__":
+    config = {
+        'mqtt': {
+            'host': 'localhost',
+            'port': 1883
+        },
+        'kafka': {
+            'servers': ['localhost:9092']
+        },
+        'redis': {
+            'host': 'localhost',
+            'port': 6379
+        },
+        'postgres': {
+            'host': 'localhost',
+            'port': 5432,
+            'database': 'transport_system',
+            'user': 'admin',
+            'password': 'password'
+        }
+    }
+    
+    processor = StreamProcessor(config)
+    
+    try:
+        processor.start()
+    except KeyboardInterrupt:
+        logger.info("🛑 Stream processor stopped")
+    except Exception as e:
+        logger.error(f"✗ Stream processor error: {e}")
