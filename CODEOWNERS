@@ -1,0 +1,23 @@
+# Global owners
+* @tech-lead @senior-dev
+
+# API and backend
+/api_server/ @backend-team
+/stream_processor/ @backend-team
+/ml_services/ @ml-team
+
+# Frontend
+/frontend/ @frontend-team
+/dashboard/ @frontend-team
+
+# Infrastructure
+/infra/ @devops-team
+/docker-compose.yml @devops-team
+/.github/ @devops-team
+
+# Blockchain
+/blockchain/ @blockchain-team
+
+# Security
+/tools/security/ @security-team
+SECURITY.md @security-team

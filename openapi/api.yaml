@@ -1,0 +1,240 @@
+openapi: 3.0.3
+info:
+  title: Smart Transportation System API
+  description: REST API for vehicle telemetry, toll management, and driver scoring
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: api-support@company.com
+
+servers:
+  - url: http://localhost:5000/api/v1
+    description: Development server
+  - url: https://api.smart-transport.com/v1
+    description: Production server
+
+paths:
+  /auth/login:
+    post:
+      summary: User login
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 6
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid credentials
+
+  /auth/register:
+    post:
+      summary: User registration
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email]
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                email:
+                  type: string
+                  format: email
+                phone:
+                  type: string
+      responses:
+        '201':
+          description: Registration successful
+        '409':
+          description: User already exists
+
+  /vehicles:
+    get:
+      summary: Get user vehicles
+      tags: [Vehicles]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of vehicles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vehicles:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Vehicle'
+
+  /vehicles/{vehicleId}/telemetry:
+    get:
+      summary: Get vehicle telemetry
+      tags: [Telemetry]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vehicleId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Telemetry data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  telemetry:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TelemetryRecord'
+
+  /telemetry:
+    post:
+      summary: Submit telemetry data
+      tags: [Telemetry]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelemetryData'
+      responses:
+        '200':
+          description: Telemetry received
+        '400':
+          description: Invalid telemetry data
+
+  /toll/charge:
+    post:
+      summary: Process toll charge
+      tags: [Toll]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vehicleId, gantryId, calculatedPrice]
+              properties:
+                vehicleId:
+                  type: string
+                gantryId:
+                  type: string
+                calculatedPrice:
+                  type: number
+                  minimum: 0
+      responses:
+        '200':
+          description: Toll charged successfully
+        '402':
+          description: Insufficient balance
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        user_id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+
+    Vehicle:
+      type: object
+      properties:
+        vehicle_id:
+          type: integer
+        registration_no:
+          type: string
+        obu_device_id:
+          type: string
+        wallet_address:
+          type: string
+        balance:
+          type: number
+
+    TelemetryData:
+      type: object
+      required: [deviceId, timestamp, location, speedKmph]
+      properties:
+        deviceId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        location:
+          type: object
+          required: [lat, lon]
+          properties:
+            lat:
+              type: number
+              minimum: -90
+              maximum: 90
+            lon:
+              type: number
+              minimum: -180
+              maximum: 180
+        speedKmph:
+          type: number
+          minimum: 0
+          maximum: 300
+        heading:
+          type: number
+          minimum: 0
+          maximum: 360
+
+    TelemetryRecord:
+      allOf:
+        - $ref: '#/components/schemas/TelemetryData'
+        - type: object
+          properties:
+            id:
+              type: integer
+            time:
+              type: string
+              format: date-time

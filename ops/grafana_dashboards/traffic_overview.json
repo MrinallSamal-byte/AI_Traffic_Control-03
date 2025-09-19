@@ -1,0 +1,72 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Smart Transport - Traffic Overview",
+    "tags": ["smart-transport", "traffic"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Active Vehicles",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(up{job=\"vehicle-telemetry\"})",
+            "legendFormat": "Active Vehicles"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 100},
+                {"color": "green", "value": 500}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Telemetry Ingestion Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(telemetry_messages_total[5m])",
+            "legendFormat": "Messages/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 6, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Average Speed by Road Segment",
+        "type": "heatmap",
+        "targets": [
+          {
+            "expr": "avg_over_time(vehicle_speed_kmph[5m]) by (road_segment)",
+            "legendFormat": "{{road_segment}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Toll Transactions",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(toll_transactions_total[5m])",
+            "legendFormat": "Transactions/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 8}
+      }
+    ],
+    "time": {"from": "now-1h", "to": "now"},
+    "refresh": "30s"
+  }
+}

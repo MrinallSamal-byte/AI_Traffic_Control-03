@@ -1,0 +1,74 @@
+groups:
+  - name: smart_transport_alerts
+    rules:
+      - alert: HighKafkaLag
+        expr: kafka_consumer_lag_sum > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Kafka consumer lag detected"
+          description: "Kafka consumer lag is {{ $value }} messages for topic {{ $labels.topic }}"
+
+      - alert: HighIngestionLatency
+        expr: histogram_quantile(0.95, rate(telemetry_ingestion_duration_seconds_bucket[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High telemetry ingestion latency"
+          description: "95th percentile ingestion latency is {{ $value }}s"
+
+      - alert: ModelServingErrorRate
+        expr: rate(ml_prediction_errors_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High ML model error rate"
+          description: "ML model error rate is {{ $value }} errors/sec"
+
+      - alert: DatabaseConnectionFailure
+        expr: up{job="postgres-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection failure"
+          description: "PostgreSQL database is not responding"
+
+      - alert: RedisConnectionFailure
+        expr: up{job="redis-exporter"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis connection failure"
+          description: "Redis cache is not responding"
+
+      - alert: HighAPIErrorRate
+        expr: rate(flask_http_request_exceptions_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API error rate"
+          description: "API error rate is {{ $value }} errors/sec"
+
+      - alert: LowDiskSpace
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is below 10% on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 90% on {{ $labels.instance }}"
