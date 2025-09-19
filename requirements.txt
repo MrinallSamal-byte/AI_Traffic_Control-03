@@ -37,7 +37,7 @@ tenacity==8.2.3
 
 # Development
 pytest==7.4.2
-black==23.7.0
+black==25.9.0
 flake8==6.0.0
 
 # New dependencies for enhanced features
