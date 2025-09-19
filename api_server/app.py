@@ -17,6 +17,9 @@ from datetime import datetime, timedelta
 import hashlib
 import requests
 import logging
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ml_services.driver_score import predict_score
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -501,6 +504,26 @@ def get_dashboard_data():
     except Exception as e:
         logger.error(f"Dashboard error: {e}")
         return jsonify({'error': 'Failed to get dashboard data'}), 500
+
+@app.route('/driver_score', methods=['POST'])
+def driver_score():
+    """Calculate driver score from telemetry data"""
+    try:
+        telemetry = request.get_json(force=True)
+        if telemetry is None:
+            return jsonify({"error": "invalid json"}), 400
+        
+        out = predict_score(telemetry)
+        response = {
+            "device_id": telemetry.get("device_id"),
+            "timestamp": telemetry.get("timestamp"),
+            "driver_score": out["score"],
+            "model": out["model"]
+        }
+        return jsonify(response)
+    except Exception as e:
+        logger.exception("driver_score error")
+        return jsonify({"error": "internal error", "detail": str(e)}), 500
 
 # Health check
 @app.route('/health', methods=['GET'])
