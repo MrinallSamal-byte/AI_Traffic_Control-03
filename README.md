@@ -21,26 +21,39 @@
 
 ## Quick Start
 
+### Automated Setup (Recommended)
+```bash
+# Linux/macOS
+./setup.sh
+
+# Windows
+setup.bat
+```
+
+### Manual Setup
 1. **Setup Environment**:
    ```bash
-   pip install -r requirements.txt
-   docker-compose up -d
+   make install
    ```
 
-2. **Run Device Simulator**:
+2. **Start Development Environment**:
    ```bash
-   python device_simulator/simulator.py
+   make dev
    ```
 
-3. **Start API Server**:
-   ```bash
-   python api_server/app.py
-   ```
-
-4. **Access Dashboard**:
+3. **Access Dashboard**:
    ```
    http://localhost:3000
    ```
+
+### Development Commands
+```bash
+make lint      # Run linters (Black, isort, ESLint)
+make test      # Run all tests
+make format    # Format code
+make build     # Build Docker images
+make ci        # Run CI checks locally
+```
 
 ## Components
 

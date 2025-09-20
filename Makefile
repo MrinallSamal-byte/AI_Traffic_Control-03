@@ -43,3 +43,21 @@ docker-down: ## Stop Docker Compose services
 
 docker-logs: ## Show Docker Compose logs
 	docker-compose logs -f
+
+setup: ## Complete project setup
+	make install
+	make build
+
+ci: ## Run CI checks locally
+	make lint
+	make test
+
+dev: ## Start development environment
+	make docker-up
+	cd frontend && npm start &
+	python api_server/app.py &
+
+stop-dev: ## Stop development environment
+	make docker-down
+	pkill -f "npm start" || true
+	pkill -f "python api_server/app.py" || true
