@@ -1,0 +1,322 @@
+groups:
+  - name: transport_system_critical
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: "{{ $labels.job }}"
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} has been down for more than 30 seconds."
+          runbook_url: "https://docs.transport-system.com/runbooks/service-down"
+
+      - alert: HighErrorRate
+        expr: rate(errors_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: "{{ $labels.service }}"
+        annotations:
+          summary: "High error rate detected in {{ $labels.service }}"
+          description: "Error rate is {{ $value }} errors per second for service {{ $labels.service }}."
+          runbook_url: "https://docs.transport-system.com/runbooks/high-error-rate"
+
+      - alert: APIResponseTimeHigh
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: critical
+          service: "api_server"
+        annotations:
+          summary: "API response time is too high"
+          description: "95th percentile response time is {{ $value }}s, which is above the 2s threshold."
+          runbook_url: "https://docs.transport-system.com/runbooks/high-latency"
+
+      - alert: BlockchainServiceUnresponsive
+        expr: blockchain_requests_total{status="error"} / blockchain_requests_total > 0.5
+        for: 1m
+        labels:
+          severity: critical
+          service: "blockchain"
+        annotations:
+          summary: "Blockchain service has high failure rate"
+          description: "Blockchain service error rate is {{ $value | humanizePercentage }}."
+          runbook_url: "https://docs.transport-system.com/runbooks/blockchain-issues"
+
+  - name: transport_system_warning
+    rules:
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes / 1024 / 1024 > 500
+        for: 5m
+        labels:
+          severity: warning
+          service: "{{ $labels.job }}"
+        annotations:
+          summary: "High memory usage in {{ $labels.job }}"
+          description: "Memory usage is {{ $value }}MB, which is above 500MB threshold."
+          runbook_url: "https://docs.transport-system.com/runbooks/high-memory"
+
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+          service: "{{ $labels.job }}"
+        annotations:
+          summary: "High CPU usage in {{ $labels.job }}"
+          description: "CPU usage is {{ $value }}%, which is above 80% threshold."
+          runbook_url: "https://docs.transport-system.com/runbooks/high-cpu"
+
+      - alert: MLPredictionLatencyHigh
+        expr: histogram_quantile(0.95, rate(ml_prediction_duration_seconds_bucket[5m])) > 1
+        for: 3m
+        labels:
+          severity: warning
+          service: "ml_services"
+        annotations:
+          summary: "ML prediction latency is high"
+          description: "95th percentile ML prediction time is {{ $value }}s, above 1s threshold."
+          runbook_url: "https://docs.transport-system.com/runbooks/ml-latency"
+
+      - alert: TelemetryProcessingLag
+        expr: rate(stream_processor_messages_failed_total[5m]) / rate(stream_processor_messages_processed_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          service: "stream_processor"
+        annotations:
+          summary: "High telemetry processing failure rate"
+          description: "Telemetry processing failure rate is {{ $value | humanizePercentage }}."
+          runbook_url: "https://docs.transport-system.com/runbooks/telemetry-processing"
+
+      - alert: DeadLetterQueueGrowth
+        expr: increase(dlq_messages_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+          service: "stream_processor"
+        annotations:
+          summary: "Dead letter queue is growing rapidly"
+          description: "{{ $value }} messages added to DLQ in the last 5 minutes."
+          runbook_url: "https://docs.transport-system.com/runbooks/dlq-growth"
+
+  - name: transport_system_business
+    rules:
+      - alert: NoActiveDevices
+        expr: active_devices_total == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: "stream_processor"
+        annotations:
+          summary: "No active devices detected"
+          description: "No devices have sent telemetry in the last 5 minutes."
+          runbook_url: "https://docs.transport-system.com/runbooks/no-devices"
+
+      - alert: LowTollTransactionRate
+        expr: rate(toll_transactions_total[10m]) < 0.01
+        for: 15m
+        labels:
+          severity: info
+          service: "api_server"
+        annotations:
+          summary: "Low toll transaction rate"
+          description: "Toll transaction rate is {{ $value }} per second, which is unusually low."
+          runbook_url: "https://docs.transport-system.com/runbooks/low-toll-rate"
+
+      - alert: HighRiskDrivingDetected
+        expr: increase(ml_predictions_total{model_type="harsh_driving"}[5m]) > 5
+        for: 1m
+        labels:
+          severity: info
+          service: "ml_services"
+        annotations:
+          summary: "Multiple high-risk driving events detected"
+          description: "{{ $value }} high-risk driving predictions in the last 5 minutes."
+          runbook_url: "https://docs.transport-system.com/runbooks/high-risk-driving"
+
+      - alert: BlockchainPendingTransactionsHigh
+        expr: blockchain_pending_transactions > 20
+        for: 5m
+        labels:
+          severity: warning
+          service: "blockchain"
+        annotations:
+          summary: "High number of pending blockchain transactions"
+          description: "{{ $value }} transactions are pending, indicating possible network congestion."
+          runbook_url: "https://docs.transport-system.com/runbooks/blockchain-congestion"
+
+  - name: transport_system_infrastructure
+    rules:
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+          service: "infrastructure"
+        annotations:
+          summary: "Disk space is running low"
+          description: "Disk space on {{ $labels.device }} is {{ $value }}% full."
+          runbook_url: "https://docs.transport-system.com/runbooks/disk-space"
+
+      - alert: DatabaseConnectionsHigh
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: "database"
+        annotations:
+          summary: "High number of database connections"
+          description: "{{ $value }} database connections are active."
+          runbook_url: "https://docs.transport-system.com/runbooks/db-connections"
+
+      - alert: RedisMemoryUsageHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: "redis"
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}."
+          runbook_url: "https://docs.transport-system.com/runbooks/redis-memory"
+
+      - alert: KafkaConsumerLag
+        expr: kafka_consumer_lag > 1000
+        for: 2m
+        labels:
+          severity: warning
+          service: "kafka"
+        annotations:
+          summary: "Kafka consumer lag is high"
+          description: "Consumer lag is {{ $value }} messages for topic {{ $labels.topic }}."
+          runbook_url: "https://docs.transport-system.com/runbooks/kafka-lag"
+
+  - name: transport_system_security
+    rules:
+      - alert: RateLimitExceeded
+        expr: increase(rate_limit_exceeded_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+          service: "api_server"
+        annotations:
+          summary: "Rate limit exceeded multiple times"
+          description: "Rate limit exceeded {{ $value }} times in the last 5 minutes for device {{ $labels.device_id }}."
+          runbook_url: "https://docs.transport-system.com/runbooks/rate-limit"
+
+      - alert: AuthenticationFailures
+        expr: increase(authentication_failures_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+          service: "api_server"
+        annotations:
+          summary: "Multiple authentication failures detected"
+          description: "{{ $value }} authentication failures in the last 5 minutes."
+          runbook_url: "https://docs.transport-system.com/runbooks/auth-failures"
+
+      - alert: UnauthorizedAPIAccess
+        expr: increase(http_requests_total{status="401"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: "api_server"
+        annotations:
+          summary: "High number of unauthorized API requests"
+          description: "{{ $value }} unauthorized requests in the last 5 minutes."
+          runbook_url: "https://docs.transport-system.com/runbooks/unauthorized-access"
+
+      - alert: SuspiciousDeviceBehavior
+        expr: increase(telemetry_validation_failures_total[10m]) > 20
+        for: 2m
+        labels:
+          severity: info
+          service: "stream_processor"
+        annotations:
+          summary: "Suspicious device behavior detected"
+          description: "{{ $value }} telemetry validation failures in 10 minutes, possible device tampering."
+          runbook_url: "https://docs.transport-system.com/runbooks/suspicious-device"
+
+  - name: transport_system_ml
+    rules:
+      - alert: MLModelAccuracyDrop
+        expr: ml_model_accuracy < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: "ml_services"
+        annotations:
+          summary: "ML model accuracy has dropped"
+          description: "Model accuracy is {{ $value }}, below 80% threshold."
+          runbook_url: "https://docs.transport-system.com/runbooks/ml-accuracy"
+
+      - alert: MLModelNotLoaded
+        expr: ml_active_models == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: "ml_services"
+        annotations:
+          summary: "No ML models are loaded"
+          description: "ML service has no active models loaded."
+          runbook_url: "https://docs.transport-system.com/runbooks/ml-no-models"
+
+      - alert: MLPredictionFailureRate
+        expr: rate(ml_errors_total[5m]) / rate(ml_predictions_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          service: "ml_services"
+        annotations:
+          summary: "High ML prediction failure rate"
+          description: "ML prediction failure rate is {{ $value | humanizePercentage }}."
+          runbook_url: "https://docs.transport-system.com/runbooks/ml-failures"
+
+      - alert: MLModelMemoryUsageHigh
+        expr: ml_model_memory_mb > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: "ml_services"
+        annotations:
+          summary: "ML model memory usage is high"
+          description: "Model {{ $labels.model_name }} is using {{ $value }}MB of memory."
+          runbook_url: "https://docs.transport-system.com/runbooks/ml-memory"
+
+  - name: transport_system_websocket
+    rules:
+      - alert: WebSocketConnectionsLow
+        expr: websocket_active_connections < 1
+        for: 10m
+        labels:
+          severity: info
+          service: "websocket"
+        annotations:
+          summary: "No active WebSocket connections"
+          description: "No clients are connected to the real-time dashboard."
+          runbook_url: "https://docs.transport-system.com/runbooks/no-websocket-clients"
+
+      - alert: WebSocketMessageQueueGrowth
+        expr: websocket_message_queue_size > 100
+        for: 2m
+        labels:
+          severity: warning
+          service: "websocket"
+        annotations:
+          summary: "WebSocket message queue is growing"
+          description: "{{ $value }} messages are queued for WebSocket delivery."
+          runbook_url: "https://docs.transport-system.com/runbooks/websocket-queue"
+
+      - alert: WebSocketBroadcastFailures
+        expr: increase(websocket_broadcast_failures_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+          service: "websocket"
+        annotations:
+          summary: "WebSocket broadcast failures detected"
+          description: "{{ $value }} WebSocket broadcast failures in the last 5 minutes."
+          runbook_url: "https://docs.transport-system.com/runbooks/websocket-failures"

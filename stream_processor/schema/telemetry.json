@@ -32,6 +32,8 @@
         },
         "altitude": {
           "type": "number",
+          "minimum": -1000,
+          "maximum": 10000,
           "description": "Altitude in meters"
         }
       }
@@ -55,7 +57,7 @@
       "type": "number",
       "minimum": 0,
       "maximum": 100,
-      "description": "Fuel level percentage (optional)"
+      "description": "Fuel level percentage"
     },
     "heading": {
       "type": "number",
@@ -67,7 +69,9 @@
       "type": "object",
       "properties": {
         "rpm": {"type": "number", "minimum": 0, "maximum": 10000},
-        "engineTemp": {"type": "number", "minimum": -40, "maximum": 150}
+        "engineTemp": {"type": "number", "minimum": -40, "maximum": 150},
+        "throttlePosition": {"type": "number", "minimum": 0, "maximum": 100},
+        "brakePosition": {"type": "number", "minimum": 0, "maximum": 100}
       }
     },
     "diagnostics": {
@@ -75,9 +79,31 @@
       "properties": {
         "errorCodes": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {"type": "string", "pattern": "^[A-Z][0-9]{4}$"}
         },
-        "batteryVoltage": {"type": "number", "minimum": 0, "maximum": 24}
+        "batteryVoltage": {"type": "number", "minimum": 0, "maximum": 24},
+        "oilPressure": {"type": "number", "minimum": 0, "maximum": 100}
+      }
+    },
+    "gyroscope": {
+      "type": "object",
+      "properties": {
+        "x": {"type": "number", "minimum": -500, "maximum": 500, "description": "X-axis angular velocity (deg/s)"},
+        "y": {"type": "number", "minimum": -500, "maximum": 500, "description": "Y-axis angular velocity (deg/s)"},
+        "z": {"type": "number", "minimum": -500, "maximum": 500, "description": "Z-axis angular velocity (deg/s)"}
+      }
+    },
+    "vehicleType": {
+      "type": "string",
+      "enum": ["car", "truck", "motorcycle", "bus"],
+      "description": "Type of vehicle"
+    },
+    "driverBehavior": {
+      "type": "object",
+      "properties": {
+        "seatbeltEngaged": {"type": "boolean"},
+        "phoneUsage": {"type": "boolean"},
+        "drowsinessLevel": {"type": "number", "minimum": 0, "maximum": 10}
       }
     }
   }

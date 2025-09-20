@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Transportation System - Real-time Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            overflow-x: hidden;
+        }
+
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            grid-template-rows: 60px 1fr;
+            height: 100vh;
+            gap: 10px;
+            padding: 10px;
+        }
+
+        .header {
+            grid-column: 1 / -1;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #4a5568;
+            font-size: 1.5rem;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #e53e3e;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.connected {
+            background: #38a169;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .sidebar {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 300px 250px 200px;
+            gap: 10px;
+        }
+
+        .widget {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s ease;
+        }
+
+        .widget:hover {
+            transform: translateY(-2px);
+        }
+
+        .widget h3 {
+            color: #4a5568;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+        }
+
+        .map-widget {
+            grid-column: 1 / -1;
+        }
+
+        #map {
+            height: 250px;
+            border-radius: 8px;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 0.8rem;
+            opacity: 0.9;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 180px;
+        }
+
+        .vehicle-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .vehicle-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background: #f7fafc;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+
+        .vehicle-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #38a169;
+        }
+
+        .vehicle-status.warning {
+            background: #d69e2e;
+        }
+
+        .vehicle-status.danger {
+            background: #e53e3e;
+        }
+
+        .alert-item {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 6px;
+            border-left: 4px solid #e53e3e;
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .alert-item.warning {
+            border-left-color: #d69e2e;
+            background: #faf089;
+            color: #744210;
+        }
+
+        .alert-item.info {
+            border-left-color: #3182ce;
+            background: #bee3f8;
+            color: #2a4365;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #4a5568;
+        }
+
+        .control-group select,
+        .control-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: opacity 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .stats-summary {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 10px;
+            background: #f7fafc;
+            border-radius: 6px;
+        }
+
+        .stat-value {
+            font-size: 1.4rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            color: #718096;
+        }
+
+        .log-container {
+            max-height: 150px;
+            overflow-y: auto;
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 10px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .log-entry {
+            margin-bottom: 2px;
+        }
+
+        .log-timestamp {
+            color: #a0aec0;
+        }
+
+        .log-level-info {
+            color: #63b3ed;
+        }
+
+        .log-level-warning {
+            color: #f6e05e;
+        }
+
+        .log-level-error {
+            color: #fc8181;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 60px auto 1fr;
+            }
+
+            .main-content {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <header class="header">
+            <h1>🚗 Smart Transportation Dashboard</h1>
+            <div class="connection-status">
+                <div class="status-indicator" id="connectionStatus"></div>
+                <span id="connectionText">Connecting...</span>
+                <span id="clientCount">0 clients</span>
+            </div>
+        </header>
+
+        <aside class="sidebar">
+            <div class="controls">
+                <div class="control-group">
+                    <label for="streamSelect">Data Stream:</label>
+                    <select id="streamSelect">
+                        <option value="telemetry">Vehicle Telemetry</option>
+                        <option value="vehicle_status">Vehicle Status</option>
+                        <option value="toll_events">Toll Events</option>
+                        <option value="ml_predictions">ML Predictions</option>
+                        <option value="system_alerts">System Alerts</option>
+                    </select>
+                </div>
+                
+                <div class="control-group">
+                    <label for="deviceFilter">Device Filter:</label>
+                    <input type="text" id="deviceFilter" placeholder="Device ID (optional)">
+                </div>
+                
+                <button class="btn" id="subscribeBtn">Subscribe</button>
+                <button class="btn" id="unsubscribeBtn">Unsubscribe</button>
+            </div>
+
+            <div class="stats-summary">
+                <div class="stat-item">
+                    <div class="stat-value" id="totalVehicles">0</div>
+                    <div class="stat-label">Active Vehicles</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="totalAlerts">0</div>
+                    <div class="stat-label">Active Alerts</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="avgSpeed">0</div>
+                    <div class="stat-label">Avg Speed (km/h)</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="tollEvents">0</div>
+                    <div class="stat-label">Toll Events</div>
+                </div>
+            </div>
+
+            <h4>Active Subscriptions</h4>
+            <div id="subscriptionsList"></div>
+        </aside>
+
+        <main class="main-content">
+            <div class="widget map-widget">
+                <h3>🗺️ Vehicle Locations</h3>
+                <div id="map"></div>
+            </div>
+
+            <div class="widget">
+                <h3>📊 Speed Distribution</h3>
+                <div class="chart-container">
+                    <canvas id="speedChart"></canvas>
+                </div>
+            </div>
+
+            <div class="widget">
+                <h3>🚨 ML Risk Predictions</h3>
+                <div class="chart-container">
+                    <canvas id="riskChart"></canvas>
+                </div>
+            </div>
+
+            <div class="widget">
+                <h3>🚗 Active Vehicles</h3>
+                <div class="vehicle-list" id="vehicleList"></div>
+            </div>
+
+            <div class="widget">
+                <h3>⚠️ System Alerts</h3>
+                <div id="alertsList"></div>
+            </div>
+
+            <div class="widget">
+                <h3>📈 Real-time Metrics</h3>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-value" id="messagesReceived">0</div>
+                        <div class="metric-label">Messages</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="dataRate">0</div>
+                        <div class="metric-label">Msg/sec</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="uptime">00:00</div>
+                        <div class="metric-label">Uptime</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        class RealtimeDashboard {
+            constructor() {
+                this.socket = null;
+                this.isConnected = false;
+                this.subscriptions = new Set();
+                this.vehicles = new Map();
+                this.alerts = [];
+                this.messagesReceived = 0;
+                this.startTime = Date.now();
+                this.lastMessageTime = Date.now();
+                
+                this.initializeSocket();
+                this.initializeMap();
+                this.initializeCharts();
+                this.setupEventListeners();
+                this.startMetricsUpdate();
+            }
+
+            initializeSocket() {
+                // Connect to WebSocket server
+                this.socket = io('http://localhost:5001', {
+                    transports: ['websocket', 'polling']
+                });
+
+                this.socket.on('connect', () => {
+                    console.log('Connected to WebSocket server');
+                    this.isConnected = true;
+                    this.updateConnectionStatus();
+                });
+
+                this.socket.on('disconnect', () => {
+                    console.log('Disconnected from WebSocket server');
+                    this.isConnected = false;
+                    this.updateConnectionStatus();
+                });
+
+                this.socket.on('connection_status', (data) => {
+                    console.log('Connection status:', data);
+                    this.updateClientCount(data.client_id);
+                });
+
+                this.socket.on('stream_data', (data) => {
+                    this.handleStreamData(data);
+                });
+
+                this.socket.on('subscription_status', (data) => {
+                    console.log('Subscription status:', data);
+                    this.updateSubscriptionsList();
+                });
+
+                this.socket.on('error', (error) => {
+                    console.error('WebSocket error:', error);
+                    this.addAlert('WebSocket Error: ' + error.message, 'error');
+                });
+            }
+
+            initializeMap() {
+                // Initialize Leaflet map
+                this.map = L.map('map').setView([20.2961, 85.8245], 13);
+                
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                }).addTo(this.map);
+
+                this.vehicleMarkers = new Map();
+            }
+
+            initializeCharts() {
+                // Speed distribution chart
+                const speedCtx = document.getElementById('speedChart').getContext('2d');
+                this.speedChart = new Chart(speedCtx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Average Speed',
+                            data: [],
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 120
+                            }
+                        }
+                    }
+                });
+
+                // Risk prediction chart
+                const riskCtx = document.getElementById('riskChart').getContext('2d');
+                this.riskChart = new Chart(riskCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Low Risk', 'Medium Risk', 'High Risk'],
+                        datasets: [{
+                            data: [0, 0, 0],
+                            backgroundColor: ['#38a169', '#d69e2e', '#e53e3e']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+            }
+
+            setupEventListeners() {
+                document.getElementById('subscribeBtn').addEventListener('click', () => {
+                    this.subscribe();
+                });
+
+                document.getElementById('unsubscribeBtn').addEventListener('click', () => {
+                    this.unsubscribe();
+                });
+            }
+
+            subscribe() {
+                const streamType = document.getElementById('streamSelect').value;
+                const deviceFilter = document.getElementById('deviceFilter').value.trim();
+                
+                const filters = {};
+                if (deviceFilter) {
+                    filters.device_id = deviceFilter;
+                }
+
+                this.socket.emit('subscribe', {
+                    stream_type: streamType,
+                    filters: filters
+                });
+
+                this.subscriptions.add(`${streamType}${deviceFilter ? `_${deviceFilter}` : ''}`);
+            }
+
+            unsubscribe() {
+                const streamType = document.getElementById('streamSelect').value;
+                const deviceFilter = document.getElementById('deviceFilter').value.trim();
+                
+                const filters = {};
+                if (deviceFilter) {
+                    filters.device_id = deviceFilter;
+                }
+
+                this.socket.emit('unsubscribe', {
+                    stream_type: streamType,
+                    filters: filters
+                });
+
+                this.subscriptions.delete(`${streamType}${deviceFilter ? `_${deviceFilter}` : ''}`);
+            }
+
+            handleStreamData(data) {
+                this.messagesReceived++;
+                this.lastMessageTime = Date.now();
+
+                switch (data.stream_type) {
+                    case 'telemetry':
+                        this.handleTelemetryData(data.data);
+                        break;
+                    case 'vehicle_status':
+                        this.handleVehicleStatus(data.data);
+                        break;
+                    case 'toll_events':
+                        this.handleTollEvent(data.data);
+                        break;
+                    case 'ml_predictions':
+                        this.handleMLPrediction(data.data);
+                        break;
+                    case 'system_alerts':
+                        this.handleSystemAlert(data.data);
+                        break;
+                }
+
+                this.updateMetrics();
+            }
+
+            handleTelemetryData(data) {
+                const deviceId = data.deviceId;
+                
+                // Update vehicle data
+                this.vehicles.set(deviceId, {
+                    ...this.vehicles.get(deviceId),
+                    ...data,
+                    lastUpdate: Date.now()
+                });
+
+                // Update map marker
+                if (data.location) {
+                    this.updateVehicleMarker(deviceId, data.location, data.speedKmph);
+                }
+
+                // Update speed chart
+                this.updateSpeedChart(data.speedKmph);
+
+                // Update vehicle list
+                this.updateVehicleList();
+            }
+
+            handleVehicleStatus(data) {
+                const deviceId = data.deviceId;
+                this.vehicles.set(deviceId, {
+                    ...this.vehicles.get(deviceId),
+                    status: data.status,
+                    lastUpdate: Date.now()
+                });
+                this.updateVehicleList();
+            }
+
+            handleTollEvent(data) {
+                this.addAlert(`Toll event: ${data.device_id} at gantry ${data.gantry_id}`, 'info');
+                document.getElementById('tollEvents').textContent = 
+                    parseInt(document.getElementById('tollEvents').textContent) + 1;
+            }
+
+            handleMLPrediction(data) {
+                // Update risk chart
+                const riskLevel = data.risk_level || 'LOW';
+                this.updateRiskChart(riskLevel);
+                
+                if (data.prediction > 70) {
+                    this.addAlert(`High risk driving detected: ${data.deviceId} (${data.prediction}%)`, 'warning');
+                }
+            }
+
+            handleSystemAlert(data) {
+                this.addAlert(data.message, data.level || 'info');
+            }
+
+            updateVehicleMarker(deviceId, location, speed) {
+                const lat = location.lat;
+                const lon = location.lon;
+
+                if (this.vehicleMarkers.has(deviceId)) {
+                    // Update existing marker
+                    const marker = this.vehicleMarkers.get(deviceId);
+                    marker.setLatLng([lat, lon]);
+                    marker.setPopupContent(`${deviceId}<br>Speed: ${speed} km/h`);
+                } else {
+                    // Create new marker
+                    const marker = L.marker([lat, lon])
+                        .addTo(this.map)
+                        .bindPopup(`${deviceId}<br>Speed: ${speed} km/h`);
+                    
+                    this.vehicleMarkers.set(deviceId, marker);
+                }
+            }
+
+            updateSpeedChart(speed) {
+                const now = new Date().toLocaleTimeString();
+                
+                if (this.speedChart.data.labels.length > 20) {
+                    this.speedChart.data.labels.shift();
+                    this.speedChart.data.datasets[0].data.shift();
+                }
+                
+                this.speedChart.data.labels.push(now);
+                this.speedChart.data.datasets[0].data.push(speed);
+                this.speedChart.update('none');
+            }
+
+            updateRiskChart(riskLevel) {
+                const riskIndex = riskLevel === 'HIGH' ? 2 : riskLevel === 'MEDIUM' ? 1 : 0;
+                this.riskChart.data.datasets[0].data[riskIndex]++;
+                this.riskChart.update();
+            }
+
+            updateVehicleList() {
+                const vehicleList = document.getElementById('vehicleList');
+                vehicleList.innerHTML = '';
+
+                this.vehicles.forEach((vehicle, deviceId) => {
+                    const vehicleItem = document.createElement('div');
+                    vehicleItem.className = 'vehicle-item';
+                    
+                    const status = this.getVehicleStatus(vehicle);
+                    const statusClass = status === 'normal' ? '' : status;
+                    
+                    vehicleItem.innerHTML = `
+                        <div>
+                            <strong>${deviceId}</strong><br>
+                            <small>Speed: ${vehicle.speedKmph || 0} km/h</small>
+                        </div>
+                        <div class="vehicle-status ${statusClass}"></div>
+                    `;
+                    
+                    vehicleList.appendChild(vehicleItem);
+                });
+
+                document.getElementById('totalVehicles').textContent = this.vehicles.size;
+            }
+
+            getVehicleStatus(vehicle) {
+                if (!vehicle.speedKmph) return 'normal';
+                
+                if (vehicle.speedKmph > 100) return 'danger';
+                if (vehicle.speedKmph > 80) return 'warning';
+                return 'normal';
+            }
+
+            addAlert(message, level = 'info') {
+                const alert = {
+                    message,
+                    level,
+                    timestamp: new Date().toLocaleTimeString()
+                };
+                
+                this.alerts.unshift(alert);
+                if (this.alerts.length > 10) {
+                    this.alerts.pop();
+                }
+                
+                this.updateAlertsList();
+            }
+
+            updateAlertsList() {
+                const alertsList = document.getElementById('alertsList');
+                alertsList.innerHTML = '';
+                
+                this.alerts.forEach(alert => {
+                    const alertItem = document.createElement('div');
+                    alertItem.className = `alert-item ${alert.level}`;
+                    alertItem.innerHTML = `
+                        <div>${alert.message}</div>
+                        <small>${alert.timestamp}</small>
+                    `;
+                    alertsList.appendChild(alertItem);
+                });
+
+                document.getElementById('totalAlerts').textContent = this.alerts.length;
+            }
+
+            updateConnectionStatus() {
+                const statusIndicator = document.getElementById('connectionStatus');
+                const statusText = document.getElementById('connectionText');
+                
+                if (this.isConnected) {
+                    statusIndicator.classList.add('connected');
+                    statusText.textContent = 'Connected';
+                } else {
+                    statusIndicator.classList.remove('connected');
+                    statusText.textContent = 'Disconnected';
+                }
+            }
+
+            updateClientCount(clientId) {
+                // This would be updated from server data
+                document.getElementById('clientCount').textContent = '1 client';
+            }
+
+            updateSubscriptionsList() {
+                const subscriptionsList = document.getElementById('subscriptionsList');
+                subscriptionsList.innerHTML = '';
+                
+                this.subscriptions.forEach(subscription => {
+                    const item = document.createElement('div');
+                    item.textContent = subscription;
+                    item.style.padding = '5px';
+                    item.style.background = '#e2e8f0';
+                    item.style.borderRadius = '4px';
+                    item.style.margin = '2px 0';
+                    item.style.fontSize = '12px';
+                    subscriptionsList.appendChild(item);
+                });
+            }
+
+            updateMetrics() {
+                document.getElementById('messagesReceived').textContent = this.messagesReceived;
+                
+                // Calculate message rate
+                const now = Date.now();
+                const timeDiff = (now - this.lastMessageTime) / 1000;
+                const rate = timeDiff > 0 ? (1 / timeDiff).toFixed(1) : '0';
+                document.getElementById('dataRate').textContent = rate;
+                
+                // Calculate average speed
+                let totalSpeed = 0;
+                let vehicleCount = 0;
+                this.vehicles.forEach(vehicle => {
+                    if (vehicle.speedKmph) {
+                        totalSpeed += vehicle.speedKmph;
+                        vehicleCount++;
+                    }
+                });
+                const avgSpeed = vehicleCount > 0 ? (totalSpeed / vehicleCount).toFixed(1) : '0';
+                document.getElementById('avgSpeed').textContent = avgSpeed;
+            }
+
+            startMetricsUpdate() {
+                setInterval(() => {
+                    // Update uptime
+                    const uptime = Date.now() - this.startTime;
+                    const minutes = Math.floor(uptime / 60000);
+                    const seconds = Math.floor((uptime % 60000) / 1000);
+                    document.getElementById('uptime').textContent = 
+                        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }, 1000);
+            }
+        }
+
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            window.dashboard = new RealtimeDashboard();
+            
+            // Auto-subscribe to telemetry data
+            setTimeout(() => {
+                document.getElementById('streamSelect').value = 'telemetry';
+                window.dashboard.subscribe();
+            }, 1000);
+        });
+    </script>
+</body>
+</html>
