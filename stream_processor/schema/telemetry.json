@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "title": "Vehicle Telemetry Schema",
-  "required": ["deviceId", "timestamp", "location", "speedKmph", "acceleration", "fuelLevel"],
+  "required": ["deviceId", "timestamp", "location", "speedKmph", "acceleration"],
   "properties": {
     "deviceId": {
       "type": "string",
@@ -55,7 +55,7 @@
       "type": "number",
       "minimum": 0,
       "maximum": 100,
-      "description": "Fuel level percentage"
+      "description": "Fuel level percentage (optional)"
     },
     "heading": {
       "type": "number",

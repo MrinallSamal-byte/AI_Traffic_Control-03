@@ -1,0 +1,328 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Smart Transportation System - Enhanced Monitoring",
+    "tags": ["transport", "iot", "monitoring"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "System Overview",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=\"api_server\"}",
+            "legendFormat": "API Server",
+            "refId": "A"
+          },
+          {
+            "expr": "up{job=\"stream_processor\"}",
+            "legendFormat": "Stream Processor",
+            "refId": "B"
+          },
+          {
+            "expr": "up{job=\"ml_services\"}",
+            "legendFormat": "ML Services",
+            "refId": "C"
+          },
+          {
+            "expr": "up{job=\"blockchain_service\"}",
+            "legendFormat": "Blockchain Service",
+            "refId": "D"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "red",
+                  "value": 0
+                },
+                {
+                  "color": "green",
+                  "value": 1
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Request Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "{{method}} {{endpoint}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        },
+        "yAxes": [
+          {
+            "label": "Requests/sec",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Response Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile",
+            "refId": "B"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        },
+        "yAxes": [
+          {
+            "label": "Seconds",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{status=~\"4..|5..\"}[5m])",
+            "legendFormat": "{{status}} errors",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        },
+        "yAxes": [
+          {
+            "label": "Errors/sec",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Telemetry Processing",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(telemetry_messages_total[5m])",
+            "legendFormat": "Messages/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(stream_processor_messages_processed_total[5m])",
+            "legendFormat": "Processed/sec",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(stream_processor_messages_failed_total[5m])",
+            "legendFormat": "Failed/sec",
+            "refId": "C"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 16
+        },
+        "yAxes": [
+          {
+            "label": "Messages/sec",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "ML Predictions",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(ml_predictions_total[5m])",
+            "legendFormat": "{{model_type}} predictions/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(ml_prediction_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile latency",
+            "refId": "B"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 16
+        },
+        "yAxes": [
+          {
+            "label": "Predictions/sec",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Toll Transactions",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(toll_transactions_total[5m])",
+            "legendFormat": "{{status}} transactions/sec",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 24
+        },
+        "yAxes": [
+          {
+            "label": "Transactions/sec",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Active Connections",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "active_connections",
+            "legendFormat": "WebSocket Connections",
+            "refId": "A"
+          },
+          {
+            "expr": "kafka_consumer_lag",
+            "legendFormat": "Kafka Consumer Lag",
+            "refId": "B"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 24
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "green",
+                  "value": 0
+                },
+                {
+                  "color": "yellow",
+                  "value": 100
+                },
+                {
+                  "color": "red",
+                  "value": 1000
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes / 1024 / 1024",
+            "legendFormat": "{{job}} Memory (MB)",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 32
+        },
+        "yAxes": [
+          {
+            "label": "Memory (MB)",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "CPU Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total[5m]) * 100",
+            "legendFormat": "{{job}} CPU %",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 32
+        },
+        "yAxes": [
+          {
+            "label": "CPU %",
+            "min": 0,
+            "max": 100
+          }
+        ]
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

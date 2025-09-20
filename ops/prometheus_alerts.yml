@@ -1,0 +1,175 @@
+groups:
+  - name: transport_system_alerts
+    rules:
+      # Service availability alerts
+      - alert: ServiceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} has been down for more than 30 seconds"
+
+      # High error rate alerts
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }} errors/sec for {{ $labels.job }}"
+
+      - alert: CriticalErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical error rate detected"
+          description: "Error rate is {{ $value }} errors/sec for {{ $labels.job }}"
+
+      # Response time alerts
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.job }}"
+
+      - alert: CriticalResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical response time detected"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.job }}"
+
+      # Telemetry processing alerts
+      - alert: TelemetryProcessingLag
+        expr: kafka_consumer_lag_sum > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High telemetry processing lag"
+          description: "Kafka consumer lag is {{ $value }} messages"
+
+      - alert: TelemetryProcessingFailure
+        expr: rate(stream_processor_messages_failed_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High telemetry processing failure rate"
+          description: "Processing failure rate is {{ $value }} failures/sec"
+
+      # ML service alerts
+      - alert: MLPredictionFailure
+        expr: rate(ml_errors_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High ML prediction failure rate"
+          description: "ML prediction failure rate is {{ $value }} failures/sec"
+
+      - alert: MLModelNotLoaded
+        expr: ml_active_models == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No ML models loaded"
+          description: "ML service has no active models loaded"
+
+      # Blockchain service alerts
+      - alert: BlockchainConnectionLost
+        expr: blockchain_connection_status == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Blockchain connection lost"
+          description: "Connection to blockchain network has been lost"
+
+      - alert: TollTransactionFailure
+        expr: rate(toll_transactions_total{status="failed"}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High toll transaction failure rate"
+          description: "Toll transaction failure rate is {{ $value }} failures/sec"
+
+      # Resource usage alerts
+      - alert: HighMemoryUsage
+        expr: (process_resident_memory_bytes / 1024 / 1024) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "{{ $labels.job }} is using {{ $value }}MB of memory"
+
+      - alert: CriticalMemoryUsage
+        expr: (process_resident_memory_bytes / 1024 / 1024) > 2000
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical memory usage"
+          description: "{{ $labels.job }} is using {{ $value }}MB of memory"
+
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "{{ $labels.job }} CPU usage is {{ $value }}%"
+
+      # WebSocket connection alerts
+      - alert: HighWebSocketConnections
+        expr: active_connections > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of WebSocket connections"
+          description: "{{ $value }} active WebSocket connections"
+
+      # Dead letter queue alerts
+      - alert: HighDLQMessages
+        expr: rate(dlq_messages_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High dead letter queue message rate"
+          description: "DLQ message rate is {{ $value }} messages/sec"
+
+      # Database alerts
+      - alert: DatabaseConnectionFailure
+        expr: database_connection_errors_total > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection failures detected"
+          description: "{{ $value }} database connection failures"
+
+      # Rate limiting alerts
+      - alert: HighRateLimitHits
+        expr: rate(rate_limit_exceeded_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limit violations"
+          description: "Rate limit exceeded {{ $value }} times/sec"

@@ -103,17 +103,36 @@ def load_model(model_name: str):
         logger.error(f"Failed to load model {model_name}: {e}")
         raise
 
-def heuristic_score(telemetry: TelemetryInput) -> float:
-    """Fallback heuristic scoring when ML model is unavailable"""
+def prepare_features_array(telemetry: TelemetryInput) -> list:
+    """Prepare feature array from telemetry input"""
+    features = [
+        telemetry.speed,
+        telemetry.accel_x,
+        telemetry.accel_y,
+        telemetry.accel_z,
+        telemetry.jerk,
+        telemetry.yaw
+    ]
+    
+    # Add derived features to match training
+    accel_magnitude = np.sqrt(telemetry.accel_x**2 + telemetry.accel_y**2 + telemetry.accel_z**2)
+    lateral_accel = np.sqrt(telemetry.accel_x**2 + telemetry.accel_y**2)
+    speed_accel_ratio = telemetry.speed / (accel_magnitude + 1e-6)
+    
+    features.extend([accel_magnitude, lateral_accel, speed_accel_ratio])
+    return features
+
+def heuristic_risk_score(telemetry: TelemetryInput) -> float:
+    """Fallback heuristic risk scoring when ML model is unavailable"""
     speed = float(telemetry.speed)
     accel_x = abs(float(telemetry.accel_x))
     accel_y = abs(float(telemetry.accel_y))
     jerk = abs(float(telemetry.jerk))
     
-    # Simple heuristic formula
-    score = 0.02 * speed + 7.0 * accel_x + 4.0 * accel_y + 6.0 * jerk
-    score = max(0.0, min(100.0, score))
-    return score
+    # Simple heuristic formula for risk score
+    risk_score = 0.02 * speed + 7.0 * accel_x + 4.0 * accel_y + 6.0 * jerk
+    risk_score = max(0.0, min(100.0, risk_score))
+    return risk_score
 
 @app.middleware("http")
 async def track_metrics(request, call_next):
@@ -172,50 +191,60 @@ async def get_metrics():
         "uptime_seconds": time.time() - app.start_time if hasattr(app, 'start_time') else 0
     }
 
-@app.post("/predict/driver_score", response_model=PredictionResponse)
-async def predict_driver_score(telemetry: TelemetryInput):
-    """Predict driver score from telemetry data"""
+@app.post("/predict", response_model=PredictionResponse)
+async def predict_event_detection(telemetry: TelemetryInput):
+    """Main prediction endpoint for event detection and risk scoring"""
     start_time = time.time()
     
     try:
         # Prepare features
-        features = [
-            telemetry.speed,
-            telemetry.accel_x,
-            telemetry.accel_y,
-            telemetry.accel_z,
-            telemetry.jerk,
-            telemetry.yaw
-        ]
+        features = prepare_features_array(telemetry)
         
         # Try to use ML model
         try:
             model_info = load_model('harsh_driving_model')
-            model = model_info['model']
+            model_bundle = model_info['model']
             
-            # Predict harsh driving probability
-            prediction_proba = model.predict_proba([features])[0]
-            harsh_probability = prediction_proba[1] if len(prediction_proba) > 1 else 0.0
+            # Extract components from bundle
+            if isinstance(model_bundle, dict):
+                model = model_bundle['model']
+                scaler = model_bundle.get('scaler')
+                feature_names = model_bundle.get('feature_names', [])
+            else:
+                model = model_bundle
+                scaler = None
+                feature_names = []
             
-            # Convert to driver score (inverse of harsh driving probability)
-            driver_score = (1.0 - harsh_probability) * 100.0
+            # Scale features if scaler available
+            if scaler:
+                features_scaled = scaler.transform([features])
+            else:
+                features_scaled = [features]
+            
+            # Predict
+            prediction_proba = model.predict_proba(features_scaled)[0]
+            risk_score = prediction_proba[1] if len(prediction_proba) > 1 else 0.0
+            
             model_version = "random_forest_v1"
             confidence = max(prediction_proba)
             
-            metrics['model_predictions']['ml_model'] += 1
+            PREDICTION_COUNT.labels(model_type='ml_model', endpoint='predict').inc()
+            PREDICTION_DURATION.labels(model_type='ml_model').observe(time.time() - start_time)
             
         except Exception as e:
             logger.warning(f"ML model prediction failed, using heuristic: {e}")
-            driver_score = heuristic_score(telemetry)
+            risk_score = heuristic_risk_score(telemetry) / 100.0  # Normalize to 0-1
             model_version = "heuristic_v1"
             confidence = None
-            metrics['model_predictions']['heuristic'] += 1
+            
+            PREDICTION_COUNT.labels(model_type='heuristic', endpoint='predict').inc()
+            ERROR_COUNT.labels(error_type='model_fallback').inc()
         
         processing_time = (time.time() - start_time) * 1000
         
         return PredictionResponse(
             deviceId=telemetry.deviceId,
-            prediction=round(driver_score, 2),
+            prediction=round(risk_score * 100, 2),  # Convert to percentage
             model_version=model_version,
             confidence=round(confidence, 3) if confidence else None,
             timestamp=datetime.utcnow().isoformat() + 'Z',
@@ -224,7 +253,26 @@ async def predict_driver_score(telemetry: TelemetryInput):
         
     except Exception as e:
         logger.error(f"Prediction error: {e}")
+        ERROR_COUNT.labels(error_type='prediction_error').inc()
         raise HTTPException(status_code=500, detail="Prediction failed")
+
+@app.post("/predict/driver_score", response_model=PredictionResponse)
+async def predict_driver_score(telemetry: TelemetryInput):
+    """Predict driver score from telemetry data (legacy endpoint)"""
+    # Call main prediction endpoint and invert score for driver score
+    result = await predict_event_detection(telemetry)
+    
+    # Convert risk score to driver score (inverse)
+    driver_score = 100.0 - result.prediction
+    
+    return PredictionResponse(
+        deviceId=result.deviceId,
+        prediction=round(driver_score, 2),
+        model_version=result.model_version,
+        confidence=result.confidence,
+        timestamp=result.timestamp,
+        processing_time_ms=result.processing_time_ms
+    )
 
 @app.post("/predict/harsh_driving", response_model=PredictionResponse)
 async def predict_harsh_driving(telemetry: TelemetryInput):

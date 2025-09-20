@@ -6,7 +6,7 @@ Simplified version with essential endpoints for ML model demo
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity
 import os
 import sys
 from datetime import datetime, timedelta
@@ -15,13 +15,17 @@ import time
 import psutil
 from collections import defaultdict
 from functools import wraps
-import hashlib
-import secrets
 from dotenv import load_dotenv
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 # Load environment variables
 load_dotenv()
+
+# Import enhanced authentication
+from auth import (
+    init_auth, user_manager, require_permission, require_role, 
+    require_endpoint_access, rate_limit_by_user, create_token
+)
 
 # Prometheus metrics
 REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
@@ -44,9 +48,9 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', secrets.token_urlsafe(32))
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(seconds=int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', 3600)))
-jwt = JWTManager(app)
+
+# Initialize enhanced authentication
+jwt = init_auth(app)
 
 # Metrics tracking
 metrics = {
@@ -148,23 +152,13 @@ def get_metrics():
         'uptime_seconds': time.time() - app.start_time if hasattr(app, 'start_time') else 0
     })
 
-# User storage (use proper database in production)
-USERS = {
-    'admin': {
-        'password_hash': hashlib.sha256(os.getenv('ADMIN_PASSWORD', 'password').encode()).hexdigest(),
-        'role': 'admin'
-    },
-    'operator': {
-        'password_hash': hashlib.sha256(os.getenv('OPERATOR_PASSWORD', 'operator123').encode()).hexdigest(),
-        'role': 'operator'
-    }
-}
+# User management is now handled by auth module
 
 # Authentication endpoints
 @app.route('/auth/login', methods=['POST'])
 @rate_limit(max_requests=5, window_seconds=300)  # 5 attempts per 5 minutes
 def login():
-    """Secure login endpoint with rate limiting"""
+    """Secure login endpoint with enhanced authentication"""
     data = request.get_json()
     if not data:
         return jsonify({'error': 'Invalid request'}), 400
@@ -175,19 +169,17 @@ def login():
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
     
-    # Verify credentials
-    user = USERS.get(username)
-    if user and user['password_hash'] == hashlib.sha256(password.encode()).hexdigest():
-        access_token = create_access_token(
-            identity=username,
-            additional_claims={'role': user['role']}
-        )
+    # Authenticate user
+    user_info = user_manager.authenticate_user(username, password)
+    if user_info:
+        access_token = create_token(username)
         
-        logger.info(f"Successful login for user: {username}")
+        logger.info(f"Successful login for user: {username} (role: {user_info['role']})")
         return jsonify({
             'access_token': access_token,
             'user': username,
-            'role': user['role']
+            'role': user_info['role'],
+            'permissions': user_info['permissions']
         })
     
     logger.warning(f"Failed login attempt for user: {username}")
@@ -195,8 +187,8 @@ def login():
 
 # Telemetry ingestion endpoint
 @app.route('/telemetry/ingest', methods=['POST'])
-@jwt_required()
-@rate_limit(max_requests=1000, window_seconds=60)
+@require_permission('write')
+@rate_limit_by_user(max_requests=1000, window_seconds=60)
 def ingest_telemetry():
     """Secure telemetry ingestion endpoint"""
     try:
@@ -242,8 +234,8 @@ def ingest_telemetry():
 
 # Toll detection and charging
 @app.route('/toll/charge', methods=['POST'])
-@jwt_required()
-@rate_limit(max_requests=100, window_seconds=60)
+@require_permission('write')
+@rate_limit_by_user(max_requests=100, window_seconds=60)
 def charge_toll():
     """Process toll charge when vehicle crosses gantry"""
     try:
@@ -264,41 +256,58 @@ def charge_toll():
         
         # Call blockchain service
         import requests
-        blockchain_response = requests.post('http://localhost:5002/toll/autopay', json={
-            'vehicle_address': vehicle_address,
-            'gantry_id': data['gantry_id'],
-            'amount': toll_amount
-        }, timeout=10)
-        
-        if blockchain_response.status_code == 200:
-            blockchain_data = blockchain_response.json()
-            
-            # Update metrics
-            TOLL_TRANSACTIONS.labels(status='success').inc()
-            
-            # Log toll event
-            logger.info(f"Toll charged", extra={
-                'device_id': data['device_id'],
+        try:
+            blockchain_response = requests.post('http://localhost:5002/toll/autopay', json={
+                'vehicle_address': vehicle_address,
                 'gantry_id': data['gantry_id'],
-                'amount': toll_amount,
-                'toll_id': blockchain_data.get('toll_id'),
-                'tx_hash': blockchain_data.get('tx_hash'),
-                'paid': blockchain_data.get('paid', False)
-            })
+                'amount': toll_amount
+            }, timeout=10)
             
-            return jsonify({
-                'device_id': data['device_id'],
-                'gantry_id': data['gantry_id'],
-                'amount': toll_amount,
-                'toll_id': blockchain_data.get('toll_id'),
-                'tx_hash': blockchain_data.get('tx_hash'),
-                'paid': blockchain_data.get('paid', False),
-                'timestamp': data['timestamp']
-            })
-        else:
+            if blockchain_response.status_code == 200:
+                blockchain_data = blockchain_response.json()
+                
+                # Prepare toll event data
+                toll_event_data = {
+                    'device_id': data['device_id'],
+                    'gantry_id': data['gantry_id'],
+                    'amount': toll_amount,
+                    'toll_id': blockchain_data.get('toll_id'),
+                    'tx_hash': blockchain_data.get('tx_hash'),
+                    'paid': blockchain_data.get('paid', False),
+                    'timestamp': data['timestamp'],
+                    'location': data.get('location', {})
+                }
+                
+                # Update metrics
+                TOLL_TRANSACTIONS.labels(status='success').inc()
+                
+                # Broadcast toll event via WebSocket
+                try:
+                    from websocket_enhanced import websocket_manager
+                    if websocket_manager:
+                        websocket_manager.broadcast_toll_event(toll_event_data)
+                except ImportError:
+                    logger.warning("WebSocket manager not available for toll event broadcast")
+                
+                # Store toll event in database
+                try:
+                    store_toll_event(toll_event_data)
+                except Exception as e:
+                    logger.error(f"Failed to store toll event: {e}")
+                
+                # Log toll event
+                logger.info(f"Toll charged successfully", extra=toll_event_data)
+                
+                return jsonify(toll_event_data)
+            else:
+                TOLL_TRANSACTIONS.labels(status='failed').inc()
+                logger.error(f"Blockchain toll charge failed: {blockchain_response.text}")
+                return jsonify({"error": "blockchain toll charge failed"}), 500
+                
+        except requests.RequestException as e:
             TOLL_TRANSACTIONS.labels(status='failed').inc()
-            logger.error(f"Blockchain toll charge failed: {blockchain_response.text}")
-            return jsonify({"error": "toll charge failed"}), 500
+            logger.error(f"Blockchain service connection failed: {e}")
+            return jsonify({"error": "blockchain service unavailable"}), 503
             
     except Exception as e:
         logger.error(f"Toll charge error: {e}")
@@ -313,10 +322,60 @@ def calculate_toll_amount(vehicle_type):
     }
     return rates.get(vehicle_type, 0.05)
 
+def store_toll_event(toll_data):
+    """Store toll event in database"""
+    try:
+        import sqlite3
+        conn = sqlite3.connect('prototype.db')
+        cursor = conn.cursor()
+        
+        # Create toll_events table if not exists
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS toll_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                gantry_id TEXT NOT NULL,
+                amount REAL NOT NULL,
+                toll_id INTEGER,
+                tx_hash TEXT,
+                paid BOOLEAN DEFAULT FALSE,
+                timestamp TEXT NOT NULL,
+                location_lat REAL,
+                location_lon REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Insert toll event
+        location = toll_data.get('location', {})
+        cursor.execute('''
+            INSERT INTO toll_events 
+            (device_id, gantry_id, amount, toll_id, tx_hash, paid, timestamp, location_lat, location_lon)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            toll_data['device_id'],
+            toll_data['gantry_id'],
+            toll_data['amount'],
+            toll_data.get('toll_id'),
+            toll_data.get('tx_hash'),
+            toll_data.get('paid', False),
+            toll_data['timestamp'],
+            location.get('lat'),
+            location.get('lon')
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Toll event stored in database: {toll_data['device_id']}")
+        
+    except Exception as e:
+        logger.error(f"Failed to store toll event in database: {e}")
+
 # Driver scoring endpoint
 @app.route('/driver_score', methods=['POST'])
-@jwt_required()
-@rate_limit(max_requests=200, window_seconds=60)
+@require_permission('read')
+@rate_limit_by_user(max_requests=200, window_seconds=60)
 def driver_score():
     """Calculate driver score from telemetry data"""
     try:
@@ -374,7 +433,7 @@ def websocket_telemetry():
     })
 
 @app.route('/stream/telemetry', methods=['GET'])
-@jwt_required()
+@require_permission('read')
 def stream_telemetry():
     """Server-sent events endpoint for real-time telemetry"""
     def generate():
@@ -413,7 +472,62 @@ def stream_telemetry():
         }
     )
 
+# Add toll events query endpoint
+@app.route('/toll/events', methods=['GET'])
+@require_permission('read')
+def get_toll_events():
+    """Get toll events with optional filtering"""
+    try:
+        device_id = request.args.get('device_id')
+        limit = int(request.args.get('limit', 100))
+        
+        import sqlite3
+        conn = sqlite3.connect('prototype.db')
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        if device_id:
+            cursor.execute('''
+                SELECT * FROM toll_events 
+                WHERE device_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ''', (device_id, limit))
+        else:
+            cursor.execute('''
+                SELECT * FROM toll_events 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ''', (limit,))
+        
+        events = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        
+        return jsonify({
+            'events': events,
+            'count': len(events)
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch toll events: {e}")
+        return jsonify({"error": "failed to fetch toll events"}), 500
+
 if __name__ == "__main__":
     app.start_time = time.time()
+    
+    # Initialize WebSocket if available
+    try:
+        from websocket_enhanced import init_websocket
+        websocket_manager = init_websocket(app)
+        logger.info("WebSocket manager initialized")
+    except ImportError:
+        logger.warning("WebSocket manager not available")
+    
     logger.info("Starting API server on port 5000")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    
+    if 'websocket_manager' in locals():
+        # Run with SocketIO support
+        websocket_manager.socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    else:
+        # Run without WebSocket support
+        app.run(host='0.0.0.0', port=5000, debug=True)

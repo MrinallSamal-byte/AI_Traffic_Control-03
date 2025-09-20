@@ -17,6 +17,16 @@ import logging
 from collections import defaultdict, deque
 from pydantic import ValidationError
 from schemas import TelemetryModel, EventModel, V2XModel
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+
+# Prometheus metrics
+MESSAGES_PROCESSED = Counter('stream_processor_messages_processed_total', 'Total messages processed', ['message_type'])
+MESSAGES_FAILED = Counter('stream_processor_messages_failed_total', 'Total messages failed', ['message_type', 'error_type'])
+PROCESSING_DURATION = Histogram('stream_processor_duration_seconds', 'Message processing duration', ['message_type'])
+KAFKA_LAG = Gauge('kafka_consumer_lag', 'Kafka consumer lag', ['topic', 'partition'])
+DLQ_MESSAGES = Counter('dlq_messages_total', 'Dead letter queue messages', ['error_type'])
+ACTIVE_DEVICES = Gauge('active_devices_total', 'Number of active devices')
+RATE_LIMIT_HITS = Counter('rate_limit_exceeded_total', 'Rate limit exceeded count', ['device_id'])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -85,10 +95,15 @@ class StreamProcessor:
             logger.error(f"✗ MQTT connection failed: {rc}")
     
     def _on_mqtt_message(self, client, userdata, msg):
-        """Process incoming MQTT messages"""
+        """Process incoming MQTT messages with metrics"""
+        start_time = time.time()
+        message_type = 'unknown'
+        device_id = 'unknown'
+        
         try:
             topic_parts = msg.topic.split('/')
             if len(topic_parts) < 5:
+                MESSAGES_FAILED.labels(message_type='invalid', error_type='invalid_topic').inc()
                 return
             
             org_id = topic_parts[2]
@@ -98,13 +113,17 @@ class StreamProcessor:
             # Rate limiting check
             if not self._check_rate_limit(device_id):
                 logger.warning(f"Rate limit exceeded for device {device_id}")
+                RATE_LIMIT_HITS.labels(device_id=device_id).inc()
+                MESSAGES_FAILED.labels(message_type=message_type, error_type='rate_limit').inc()
                 return
             
             try:
                 payload = json.loads(msg.payload.decode())
             except json.JSONDecodeError as e:
                 # Send to dead letter queue
-                self._send_to_dlq(msg.payload, f"Invalid JSON: {e}", device_id)
+                self._send_to_dlq(msg.payload, f"Invalid JSON: {e}", device_id, 'json_error')
+                MESSAGES_FAILED.labels(message_type=message_type, error_type='json_error').inc()
+                DLQ_MESSAGES.labels(error_type='json_error').inc()
                 return
             
             # Validate and enrich message
@@ -119,14 +138,22 @@ class StreamProcessor:
                     value=enriched_payload
                 )
                 
+                # Update metrics
+                MESSAGES_PROCESSED.labels(message_type=message_type).inc()
+                PROCESSING_DURATION.labels(message_type=message_type).observe(time.time() - start_time)
+                
                 logger.info(f"📨 Processed {message_type} from {device_id}")
             else:
                 # Send invalid message to DLQ
-                self._send_to_dlq(payload, "Validation failed", device_id)
+                self._send_to_dlq(payload, "Validation failed", device_id, 'validation_error')
+                MESSAGES_FAILED.labels(message_type=message_type, error_type='validation_error').inc()
+                DLQ_MESSAGES.labels(error_type='validation_error').inc()
             
         except Exception as e:
             logger.error(f"✗ Message processing error: {e}")
-            self._send_to_dlq(msg.payload, f"Processing error: {e}", device_id)
+            self._send_to_dlq(msg.payload, f"Processing error: {e}", device_id, 'processing_error')
+            MESSAGES_FAILED.labels(message_type=message_type, error_type='processing_error').inc()
+            DLQ_MESSAGES.labels(error_type='processing_error').inc()
     
     def _validate_and_enrich(self, payload, message_type, device_id):
         """Validate message using Pydantic models and add enrichment data"""
@@ -233,11 +260,12 @@ class StreamProcessor:
         device_times.append(now)
         return True
     
-    def _send_to_dlq(self, payload, error_reason, device_id):
-        """Send invalid messages to dead letter queue"""
+    def _send_to_dlq(self, payload, error_reason, device_id, error_type='unknown'):
+        """Send invalid messages to dead letter queue with metrics"""
         dlq_message = {
             'original_payload': payload.decode() if isinstance(payload, bytes) else payload,
             'error_reason': error_reason,
+            'error_type': error_type,
             'device_id': device_id,
             'timestamp': datetime.utcnow().isoformat() + 'Z'
         }
@@ -482,22 +510,49 @@ class StreamProcessor:
         
         self.mqtt_client.loop_forever()
 
-# Health endpoint for stream processor
-from flask import Flask
+# Health and metrics endpoints for stream processor
+from flask import Flask, Response
 from flask_cors import CORS
 import threading
 
-def create_health_server():
-    """Create health check server for stream processor"""
+def create_health_server(processor_instance):
+    """Create health check and metrics server for stream processor"""
     health_app = Flask(__name__)
     CORS(health_app)
     
     @health_app.route('/health', methods=['GET'])
     def health():
+        # Update active devices gauge
+        active_device_count = len([d for d, times in processor_instance.device_message_counts.items() 
+                                 if times and time.time() - times[-1] < 300])  # Active in last 5 minutes
+        ACTIVE_DEVICES.set(active_device_count)
+        
         return {
             'status': 'healthy',
             'service': 'stream_processor',
-            'timestamp': datetime.utcnow().isoformat() + 'Z'
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'active_devices': active_device_count,
+            'mqtt_connected': processor_instance.mqtt_client.is_connected() if hasattr(processor_instance.mqtt_client, 'is_connected') else True
+        }
+    
+    @health_app.route('/metrics', methods=['GET'])
+    def metrics():
+        """Prometheus metrics endpoint"""
+        return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+    
+    @health_app.route('/metrics/json', methods=['GET'])
+    def metrics_json():
+        """JSON metrics for internal monitoring"""
+        active_device_count = len([d for d, times in processor_instance.device_message_counts.items() 
+                                 if times and time.time() - times[-1] < 300])
+        
+        return {
+            'active_devices': active_device_count,
+            'total_devices_seen': len(processor_instance.device_message_counts),
+            'mqtt_connected': processor_instance.mqtt_client.is_connected() if hasattr(processor_instance.mqtt_client, 'is_connected') else True,
+            'kafka_producer_connected': processor_instance.kafka_producer is not None,
+            'redis_connected': processor_instance.redis_client is not None,
+            'db_connected': processor_instance.db_conn is not None
         }
     
     return health_app
@@ -529,14 +584,14 @@ if __name__ == "__main__":
     
     processor = StreamProcessor(config)
     
-    # Start health server in background
-    health_app = create_health_server()
+    # Start health and metrics server in background
+    health_app = create_health_server(processor)
     health_thread = threading.Thread(
         target=lambda: health_app.run(host='0.0.0.0', port=5004, debug=False),
         daemon=True
     )
     health_thread.start()
-    logger.info("✓ Health server started on port 5004")
+    logger.info("✓ Health and metrics server started on port 5004")
     
     try:
         processor.start()

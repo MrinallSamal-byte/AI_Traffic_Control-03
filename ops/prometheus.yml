@@ -1,0 +1,46 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # API Server
+  - job_name: 'api_server'
+    static_configs:
+      - targets: ['localhost:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # ML Services
+  - job_name: 'ml_services'
+    static_configs:
+      - targets: ['localhost:5002']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # Stream Processor
+  - job_name: 'stream_processor'
+    static_configs:
+      - targets: ['localhost:5004']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # Blockchain Service
+  - job_name: 'blockchain_service'
+    static_configs:
+      - targets: ['localhost:5003']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

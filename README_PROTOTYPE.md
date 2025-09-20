@@ -1,445 +1,321 @@
-# Smart Transportation System - Full System Guide
-
-## Architecture Overview
-
-The Smart Transportation System consists of the following components:
-
-```
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   Device        │───▶│ MQTT Broker  │───▶│ Stream Process  │
-│   Simulator     │    │   (Port 1883)│    │   (Port 5004)   │
-└─────────────────┘    └──────────────┘    └─────────────────┘
-                                                     │
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   Blockchain    │◀───│  API Server  │◀───│   Database      │
-│   (Port 5002)   │    │  (Port 5000) │    │ (PostgreSQL)    │
-└─────────────────┘    └──────────────┘    └─────────────────┘
-                                │
-                       ┌─────────────────┐
-                       │   ML Services   │
-                       │   (Port 5002)   │
-                       └─────────────────┘
-```
+# Smart Transportation System - Prototype Guide
 
 ## Quick Start
 
 ### Prerequisites
+- Docker & Docker Compose
+- Python 3.8+
+- Node.js 16+ (for frontend)
 
-1. **Python 3.8+** with pip
-2. **Node.js 14+** with npm
-3. **PostgreSQL 12+**
-4. **Redis 6+**
-5. **Mosquitto MQTT Broker**
-
-### 1. Environment Setup
-
+### 1. Start Infrastructure Services
 ```bash
-# Clone and setup
-git clone <repository>
-cd Protopype
+# Start all infrastructure services
+docker-compose up -d
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-
-# Setup environment variables
-cp .env.example .env
-# Edit .env with your configuration
+# Verify services are running
+docker-compose ps
 ```
 
-### 2. Database Setup
+### 2. Start Application Services
 
-```bash
-# Start PostgreSQL and create database
-createdb transport_system
-
-# Run database migrations
-python -c "
-import psycopg2
-conn = psycopg2.connect('postgresql://admin:password@localhost:5432/transport_system')
-cursor = conn.cursor()
-cursor.execute(open('database/init.sql').read())
-conn.commit()
-"
-```
-
-### 3. Start Core Services
-
-#### Terminal 1: MQTT Broker
-```bash
-mosquitto -c config/mosquitto.conf
-```
-
-#### Terminal 2: Stream Processor
+#### Terminal 1: Stream Processor
 ```bash
 cd stream_processor
 python processor.py
 ```
 
-#### Terminal 3: API Server
-```bash
-cd api_server
-python app.py
-```
-
-#### Terminal 4: ML Services
+#### Terminal 2: ML Services
 ```bash
 cd ml_services
 python serve.py
 ```
 
-#### Terminal 5: Blockchain Service
+#### Terminal 3: Blockchain Service
 ```bash
 cd blockchain
 python blockchain_service.py
 ```
 
-### 4. Train ML Model
+#### Terminal 4: API Server
+```bash
+cd api_server
+python app.py
+```
 
+### 3. Train ML Model (First Time)
 ```bash
 cd ml/training
-python train_harsh_driving.py
+python train_enhanced.py --samples 10000
 ```
 
-### 5. Start Dashboard
-
+### 4. Generate Demo Data
 ```bash
-# Open dashboard in browser
-open dashboard/realtime_dashboard.html
-# Or use the enhanced dashboard
-open dashboard/index.html
+cd tools
+python demo_data_generator.py --vehicles 5 --duration 10
 ```
 
-### 6. Generate Sample Data
+## System Architecture Flow
 
-```bash
-cd device_simulator
-python simulator.py
+```
+Device Simulator → MQTT → Stream Processor → Kafka → Database
+                                    ↓
+                            ML Services ← API Server → WebSocket → Dashboard
+                                    ↓
+                            Blockchain Service
 ```
 
-## Component Details
+## Step-by-Step Verification
 
-### 1. Telemetry Ingestion & Validation
-
-**Schema**: `stream_processor/schema/telemetry.json`
-- Required fields: `deviceId`, `timestamp`, `location`, `speedKmph`, `acceleration`, `fuelLevel`
-- Validation using Pydantic models in `stream_processor/schemas.py`
-- Invalid messages sent to dead letter queue (`transport.dlq`)
-
-**Testing**:
+### 1. Health Checks
 ```bash
-python -m pytest tests/unit/test_telemetry_validation.py -v
+# Check all services are healthy
+curl http://localhost:5000/health  # API Server
+curl http://localhost:5002/health  # ML Services
+curl http://localhost:5004/health  # Stream Processor
+curl http://localhost:5002/health  # Blockchain Service
 ```
 
-### 2. ML Pipeline
-
-**Training**:
+### 2. Authentication
 ```bash
-cd ml/training
-python train_harsh_driving.py
-```
-
-**Serving API**:
-- Endpoint: `POST http://localhost:5002/predict/driver_score`
-- Endpoint: `POST http://localhost:5002/predict/harsh_driving`
-- Models stored in `ml/models/` with versioning
-
-**Testing**:
-```bash
-python -m pytest tests/unit/test_ml_inference.py -v
-```
-
-### 3. API Security
-
-**Authentication**:
-- JWT tokens required for protected endpoints
-- Login: `POST /auth/login`
-- Rate limiting: 100 requests/minute per IP
-
-**Protected Endpoints**:
-- `POST /telemetry/ingest` - Telemetry data ingestion
-- `POST /toll/charge` - Toll charging
-- `POST /driver_score` - Driver scoring
-
-**Example Usage**:
-```bash
-# Login
+# Login to get JWT token
 curl -X POST http://localhost:5000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "password"}'
+  -d '{"username": "admin", "password": "admin123"}'
 
-# Use token
+# Save the access_token from response
+export TOKEN="your_access_token_here"
+```
+
+### 3. Telemetry Ingestion
+```bash
+# Send valid telemetry
 curl -X POST http://localhost:5000/telemetry/ingest \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"deviceId": "DEVICE_001", ...}'
+  -d '{
+    "deviceId": "TEST_001",
+    "timestamp": "2024-01-15T10:30:00Z",
+    "location": {"lat": 20.2961, "lon": 85.8245},
+    "speedKmph": 45.5,
+    "acceleration": {"x": 1.2, "y": -0.8, "z": 9.8},
+    "fuelLevel": 75.5
+  }'
 ```
 
-### 4. Real-time Dashboard
-
-**Features**:
-- Live telemetry streaming via Server-Sent Events
-- Real-time vehicle tracking on map
-- Event notifications (harsh driving, speed violations, low fuel)
-- System metrics and status
-
-**Access**: `http://localhost:3000` or open `dashboard/realtime_dashboard.html`
-
-### 5. Blockchain Integration
-
-**Smart Contract**: `blockchain/contracts/TollManager.sol`
-
-**API Endpoints**:
-- `POST /toll/create` - Create toll record
-- `POST /toll/autopay` - Auto-pay toll
-- `GET /toll/<id>` - Get toll record
-- `GET /balance/<address>` - Get vehicle balance
-
-**Testing**:
+### 4. ML Prediction
 ```bash
-python -m pytest tests/unit/test_blockchain_integration.py -v
+# Get driver score prediction
+curl -X POST http://localhost:5002/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "deviceId": "TEST_001",
+    "speed": 45.5,
+    "accel_x": 1.2,
+    "accel_y": -0.8,
+    "accel_z": 9.8,
+    "jerk": 0.5,
+    "yaw": 2.0
+  }'
 ```
 
-### 6. Monitoring
-
-**Prometheus Metrics**:
-- API Server: `http://localhost:5000/metrics`
-- ML Services: `http://localhost:5002/metrics`
-
-**Key Metrics**:
-- `http_requests_total` - Total HTTP requests
-- `http_request_duration_seconds` - Request latency
-- `telemetry_messages_total` - Telemetry ingestion count
-- `ml_predictions_total` - ML prediction count
-- `toll_transactions_total` - Toll transaction count
-
-**Grafana Dashboard**: Import `ops/grafana_dashboards/transport_system_dashboard.json`
-
-## Sample Data Generation
-
-### Generate Telemetry Data
-
-```bash
-cd device_simulator
-python simulator.py --devices 10 --duration 300
-```
-
-### Sample Telemetry Message
-
+Expected output:
 ```json
 {
-  "deviceId": "DEVICE_12345678",
+  "deviceId": "TEST_001",
+  "prediction": 25.4,
+  "model_version": "random_forest_v1",
+  "confidence": 0.85,
   "timestamp": "2024-01-15T10:30:00Z",
-  "location": {
-    "lat": 20.2961,
-    "lon": 85.8245,
-    "altitude": 100.5
-  },
-  "speedKmph": 65.5,
-  "acceleration": {
-    "x": 2.1,
-    "y": -1.5,
-    "z": 9.8
-  },
-  "fuelLevel": 75.5,
-  "heading": 180.0,
-  "engineData": {
-    "rpm": 2500.0,
-    "engineTemp": 85.0
-  }
+  "processing_time_ms": 12.5
 }
 ```
 
-## Testing
-
-### Run All Tests
-
+### 5. Toll Event
 ```bash
-# Unit tests
-python -m pytest tests/unit/ -v
-
-# Integration tests
-python -m pytest tests/integration/ -v
-
-# Specific component tests
-python -m pytest tests/unit/test_telemetry_validation.py -v
-python -m pytest tests/unit/test_ml_inference.py -v
-python -m pytest tests/unit/test_blockchain_integration.py -v
-```
-
-### Manual Testing
-
-1. **Telemetry Validation**:
-```bash
-curl -X POST http://localhost:5000/telemetry/ingest \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d @tests/data/valid_telemetry.json
-```
-
-2. **ML Prediction**:
-```bash
-curl -X POST http://localhost:5002/predict/driver_score \
-  -H "Content-Type: application/json" \
-  -d '{"deviceId": "TEST", "speed": 60, "accel_x": 2, "accel_y": 1, "accel_z": 9.8, "jerk": 0.5, "yaw": 0}'
-```
-
-3. **Toll Payment**:
-```bash
+# Trigger toll charge
 curl -X POST http://localhost:5000/toll/charge \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"device_id": "DEVICE_001", "gantry_id": 1, "location": {"lat": 20.2961, "lon": 85.8245}, "timestamp": "2024-01-15T10:30:00Z"}'
+  -d '{
+    "device_id": "TEST_001",
+    "gantry_id": "GANTRY_001",
+    "location": {"lat": 20.3000, "lon": 85.8300},
+    "timestamp": "2024-01-15T10:30:00Z"
+  }'
 ```
 
-## Production Deployment
+Expected output:
+```json
+{
+  "device_id": "TEST_001",
+  "gantry_id": "GANTRY_001",
+  "amount": 0.05,
+  "toll_id": 1,
+  "tx_hash": "0x...",
+  "paid": true,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
 
-### Docker Compose
+### 6. Real-time Dashboard
+1. Open browser: http://localhost:3000/realtime_enhanced.html
+2. Login with admin/admin123
+3. Observe live vehicle positions and events
 
+### 7. Monitoring
 ```bash
-# Build and start all services
-docker-compose up -d
+# View Prometheus metrics
+curl http://localhost:5000/metrics
+curl http://localhost:5002/metrics
+curl http://localhost:5004/metrics
 
-# Scale specific services
-docker-compose up -d --scale api_server=3
+# View JSON metrics
+curl http://localhost:5000/metrics/json
 ```
 
-### Kubernetes
+## Demo Scenarios
 
+### Scenario 1: Normal Operation
 ```bash
-# Deploy to Kubernetes
-kubectl apply -f infra/k8s/
+# Generate normal traffic
+python tools/demo_data_generator.py --vehicles 3 --duration 5
 ```
+- Vehicles move normally
+- Occasional events generated
+- All telemetry validated and processed
 
-### Environment Variables
-
-Key environment variables for production:
-
+### Scenario 2: Harsh Driving Events
 ```bash
-# Security
-JWT_SECRET_KEY=<long-random-string>
-ADMIN_PASSWORD=<secure-password>
-ENCRYPTION_KEY=<32-char-encryption-key>
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/db
-REDIS_URL=redis://host:6379
-
-# Blockchain
-BLOCKCHAIN_RPC_URL=https://mainnet.infura.io/v3/<key>
-BLOCKCHAIN_PRIVATE_KEY=<private-key>
-
-# External APIs
-WEATHER_API_KEY=<api-key>
-MAPS_API_KEY=<api-key>
+# Generate aggressive driving patterns
+python tools/demo_data_generator.py --vehicles 2 --duration 3
 ```
+- Watch for HARSH_BRAKE and HARSH_ACCEL events
+- ML model detects high-risk behavior
+- Events appear in real-time dashboard
+
+### Scenario 3: Invalid Data Handling
+```bash
+# Demo includes ~2% invalid messages
+python tools/demo_data_generator.py --vehicles 1 --duration 2
+```
+- Invalid messages sent to dead letter queue
+- Valid messages processed normally
+- Check DLQ metrics in monitoring
+
+### Scenario 4: Toll Processing
+```bash
+# Vehicles cross toll gantries
+python tools/demo_data_generator.py --vehicles 2 --duration 10
+```
+- Automatic toll detection when near gantries
+- Blockchain transactions recorded
+- Payment status tracked
+
+## Expected Outputs
+
+### ML Predictions
+- **Low Risk**: prediction < 30 (normal driving)
+- **Medium Risk**: 30 ≤ prediction < 70 (moderate events)
+- **High Risk**: prediction ≥ 70 (harsh driving detected)
+
+### Toll Transactions
+- **Successful**: `paid: true`, transaction hash present
+- **Failed**: `paid: false`, insufficient balance or contract error
+
+### Event Types
+- `HARSH_BRAKE`: Sudden deceleration detected
+- `HARSH_ACCEL`: Rapid acceleration detected
+- `SPEED_VIOLATION`: Speed limit exceeded
+- `toll_charge`: Vehicle crossed toll gantry
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **MQTT Connection Failed**:
-   - Check Mosquitto is running: `systemctl status mosquitto`
-   - Verify port 1883 is open: `netstat -an | grep 1883`
+1. **Services not starting**
+   ```bash
+   # Check Docker services
+   docker-compose logs
+   
+   # Check ports
+   netstat -tulpn | grep -E ':(5000|5002|5004|1883|9092|5432|6379|8545)'
+   ```
 
-2. **Database Connection Error**:
-   - Check PostgreSQL status: `systemctl status postgresql`
-   - Verify credentials in `.env`
+2. **Authentication failures**
+   ```bash
+   # Verify credentials
+   curl -X POST http://localhost:5000/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "admin123"}'
+   ```
 
-3. **ML Model Not Found**:
-   - Train model first: `cd ml/training && python train_harsh_driving.py`
-   - Check model path: `ls ml/models/`
+3. **ML model not found**
+   ```bash
+   # Train model first
+   cd ml/training
+   python train_enhanced.py
+   ```
 
-4. **Blockchain Connection Failed**:
-   - Start Ganache CLI: `ganache-cli`
-   - Check RPC URL in `.env`
+4. **Blockchain connection issues**
+   ```bash
+   # Check Ganache is running
+   curl -X POST http://localhost:8545 \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","method":"eth_accounts","params":[],"id":1}'
+   ```
 
-### Logs
+### Log Locations
+- API Server: Console output
+- Stream Processor: Console output + port 5004/health
+- ML Services: Console output + port 5002/health
+- Blockchain: Console output + port 5002/health
 
+### Performance Expectations
+- **Telemetry Processing**: 100+ messages/second
+- **ML Predictions**: <100ms response time
+- **Toll Transactions**: <2 seconds end-to-end
+- **WebSocket Updates**: <500ms latency
+
+## Development
+
+### Adding New Features
+1. Update relevant service
+2. Add unit tests
+3. Update monitoring metrics
+4. Test with demo data generator
+
+### Configuration
+- Environment variables in `.env` files
+- Service configs in respective directories
+- Docker Compose overrides in `docker-compose.override.yml`
+
+### Testing
 ```bash
-# API Server logs
-tail -f api_server.log
+# Run all tests
+make test
 
-# Stream Processor logs
-tail -f stream_processor.log
-
-# ML Services logs
-tail -f ml_services.log
+# Run specific component tests
+pytest tests/unit/test_telemetry_validation_enhanced.py
+pytest tests/unit/test_ml_serving_enhanced.py
+pytest tests/unit/test_blockchain_integration_enhanced.py
 ```
 
-## Performance Tuning
+## Production Considerations
 
-### Recommended Settings
+### Security
+- Change default passwords
+- Use proper JWT secrets
+- Enable HTTPS/TLS
+- Implement proper RBAC
 
-- **API Server**: 4 workers, 1GB RAM per worker
-- **ML Services**: 2 workers, 2GB RAM per worker
-- **Stream Processor**: 8GB RAM, SSD storage
-- **Database**: Connection pool size 20, shared_buffers 256MB
-
-### Scaling
-
-- **Horizontal**: Use load balancer for API servers
-- **Vertical**: Increase RAM for ML services
-- **Database**: Use read replicas for analytics queries
-
-## API Reference
-
-### Authentication
-
-```bash
-POST /auth/login
-{
-  "username": "admin",
-  "password": "password"
-}
-```
-
-### Telemetry
-
-```bash
-POST /telemetry/ingest
-Authorization: Bearer <token>
-{
-  "deviceId": "DEVICE_001",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "location": {"lat": 20.2961, "lon": 85.8245},
-  "speedKmph": 65.5,
-  "acceleration": {"x": 2.1, "y": -1.5, "z": 9.8},
-  "fuelLevel": 75.5
-}
-```
-
-### ML Predictions
-
-```bash
-POST /predict/driver_score
-{
-  "deviceId": "DEVICE_001",
-  "speed": 60,
-  "accel_x": 2,
-  "accel_y": 1,
-  "accel_z": 9.8,
-  "jerk": 0.5,
-  "yaw": 0
-}
-```
+### Scalability
+- Use Kafka partitioning
+- Scale ML services horizontally
+- Implement database sharding
+- Use load balancers
 
 ### Monitoring
-
-```bash
-GET /health          # Health check
-GET /metrics         # Prometheus metrics
-GET /metrics/json    # JSON metrics
-```
-
-## Support
-
-For issues and questions:
-1. Check logs for error messages
-2. Verify all services are running
-3. Test with sample data
-4. Check network connectivity between services
+- Set up Prometheus + Grafana
+- Configure alerting rules
+- Monitor resource usage
+- Track business metrics

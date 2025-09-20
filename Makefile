@@ -1,4 +1,4 @@
-.PHONY: help install test lint format clean build docker-build docker-up docker-down
+.PHONY: help install dev test lint format build clean demo
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -9,55 +9,83 @@ help: ## Show this help message
 install: ## Install dependencies
 	pip install -r requirements.txt
 	pip install -r requirements-dev.txt
-	cd frontend && npm ci
-	pre-commit install
+
+dev: ## Start development environment
+	docker-compose up -d
+	@echo "Infrastructure services started. Run 'make services' to start application services."
+
+services: ## Start all application services
+	@echo "Starting services in separate terminals..."
+	@echo "1. Stream Processor: cd stream_processor && python processor.py"
+	@echo "2. ML Services: cd ml_services && python serve.py"
+	@echo "3. Blockchain Service: cd blockchain && python blockchain_service.py"
+	@echo "4. API Server: cd api_server && python app.py"
+
+full-stack: ## Start full stack with Docker
+	docker-compose --profile full-stack up -d
+
+train-model: ## Train ML model
+	cd ml/training && python train_enhanced.py --samples 10000
+
+demo: ## Run demo data generator
+	cd tools && python demo_data_generator.py --vehicles 5 --duration 10
 
 test: ## Run all tests
 	pytest tests/ -v
-	cd frontend && npm test
+
+test-unit: ## Run unit tests only
+	pytest tests/unit/ -v
+
+test-integration: ## Run integration tests only
+	pytest tests/integration/ -v
 
 lint: ## Run linters
-	pre-commit run --all-files
-	cd frontend && npm run lint
+	black --check .
+	isort --check-only .
+	flake8 .
 
 format: ## Format code
 	black .
 	isort .
-	cd frontend && npm run format
-
-clean: ## Clean build artifacts
-	find . -type d -name __pycache__ -delete
-	find . -type f -name "*.pyc" -delete
-	rm -rf .pytest_cache
-	rm -rf build/
-	rm -rf dist/
 
 build: ## Build Docker images
-	./ci-scripts/build_images.sh
+	docker-compose build
 
-docker-up: ## Start services with Docker Compose
-	docker-compose up -d
+clean: ## Clean up containers and volumes
+	docker-compose down -v
+	docker system prune -f
 
-docker-down: ## Stop Docker Compose services
-	docker-compose down
-
-docker-logs: ## Show Docker Compose logs
+logs: ## Show logs from all services
 	docker-compose logs -f
 
-setup: ## Complete project setup
-	make install
-	make build
+health: ## Check health of all services
+	@echo "Checking service health..."
+	@curl -s http://localhost:5000/health | jq . || echo "API Server: DOWN"
+	@curl -s http://localhost:5002/health | jq . || echo "ML Services: DOWN"
+	@curl -s http://localhost:5004/health | jq . || echo "Stream Processor: DOWN"
+	@curl -s http://localhost:5003/health | jq . || echo "Blockchain Service: DOWN"
 
-ci: ## Run CI checks locally
-	make lint
-	make test
+metrics: ## Show metrics from all services
+	@echo "=== API Server Metrics ==="
+	@curl -s http://localhost:5000/metrics/json | jq .
+	@echo "=== ML Services Metrics ==="
+	@curl -s http://localhost:5002/metrics/json | jq .
+	@echo "=== Stream Processor Metrics ==="
+	@curl -s http://localhost:5004/metrics/json | jq .
 
-dev: ## Start development environment
-	make docker-up
-	cd frontend && npm start &
-	python api_server/app.py &
+dashboard: ## Open monitoring dashboard
+	@echo "Opening Grafana dashboard..."
+	@echo "URL: http://localhost:3001 (admin/admin)"
+	@echo "Prometheus: http://localhost:9090"
 
-stop-dev: ## Stop development environment
-	make docker-down
-	pkill -f "npm start" || true
-	pkill -f "python api_server/app.py" || true
+prototype: ## Run complete prototype demo
+	@echo "Starting complete prototype demo..."
+	make dev
+	sleep 10
+	make train-model
+	@echo "Starting services (run in separate terminals):"
+	@echo "Terminal 1: cd stream_processor && python processor.py"
+	@echo "Terminal 2: cd ml_services && python serve.py"
+	@echo "Terminal 3: cd blockchain && python blockchain_service.py"
+	@echo "Terminal 4: cd api_server && python app.py"
+	@echo "Then run: make demo"
