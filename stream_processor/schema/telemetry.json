@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "title": "Vehicle Telemetry Schema",
-  "required": ["deviceId", "timestamp", "location", "speedKmph"],
+  "required": ["deviceId", "timestamp", "location", "speedKmph", "acceleration", "fuelLevel"],
   "properties": {
     "deviceId": {
       "type": "string",
@@ -42,25 +42,31 @@
       "maximum": 300,
       "description": "Speed in kilometers per hour"
     },
+    "acceleration": {
+      "type": "object",
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": {"type": "number", "minimum": -50, "maximum": 50, "description": "X-axis acceleration (m/s²)"},
+        "y": {"type": "number", "minimum": -50, "maximum": 50, "description": "Y-axis acceleration (m/s²)"},
+        "z": {"type": "number", "minimum": -50, "maximum": 50, "description": "Z-axis acceleration (m/s²)"}
+      }
+    },
+    "fuelLevel": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Fuel level percentage"
+    },
     "heading": {
       "type": "number",
       "minimum": 0,
       "maximum": 360,
       "description": "Heading in degrees (0-360)"
     },
-    "acceleration": {
-      "type": "object",
-      "properties": {
-        "x": {"type": "number", "description": "X-axis acceleration (m/s²)"},
-        "y": {"type": "number", "description": "Y-axis acceleration (m/s²)"},
-        "z": {"type": "number", "description": "Z-axis acceleration (m/s²)"}
-      }
-    },
     "engineData": {
       "type": "object",
       "properties": {
         "rpm": {"type": "number", "minimum": 0, "maximum": 10000},
-        "fuelLevel": {"type": "number", "minimum": 0, "maximum": 100},
         "engineTemp": {"type": "number", "minimum": -40, "maximum": 150}
       }
     },

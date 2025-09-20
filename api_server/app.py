@@ -14,6 +14,23 @@ import logging
 import time
 import psutil
 from collections import defaultdict
+from functools import wraps
+import hashlib
+import secrets
+from dotenv import load_dotenv
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+
+# Load environment variables
+load_dotenv()
+
+# Prometheus metrics
+REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
+REQUEST_DURATION = Histogram('http_request_duration_seconds', 'HTTP request duration', ['method', 'endpoint'])
+ACTIVE_CONNECTIONS = Gauge('active_connections', 'Number of active connections')
+TELEMETRY_MESSAGES = Counter('telemetry_messages_total', 'Total telemetry messages processed')
+TOLL_TRANSACTIONS = Counter('toll_transactions_total', 'Total toll transactions', ['status'])
+ML_PREDICTIONS = Counter('ml_predictions_total', 'Total ML predictions', ['model_type'])
+ERROR_COUNT = Counter('errors_total', 'Total errors', ['error_type'])
 
 # Add ml_services to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,8 +44,8 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
-app.config['JWT_SECRET_KEY'] = 'your-secret-key'  # Change in production
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', secrets.token_urlsafe(32))
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(seconds=int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', 3600)))
 jwt = JWTManager(app)
 
 # Metrics tracking
@@ -38,7 +55,34 @@ metrics = {
     'response_times': defaultdict(list)
 }
 
-# Simple auth middleware
+# Rate limiting storage
+rate_limit_storage = defaultdict(list)
+
+def rate_limit(max_requests=100, window_seconds=60):
+    """Rate limiting decorator"""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
+            now = time.time()
+            
+            # Clean old requests
+            rate_limit_storage[client_ip] = [
+                req_time for req_time in rate_limit_storage[client_ip]
+                if now - req_time < window_seconds
+            ]
+            
+            # Check rate limit
+            if len(rate_limit_storage[client_ip]) >= max_requests:
+                return jsonify({'error': 'Rate limit exceeded'}), 429
+            
+            # Add current request
+            rate_limit_storage[client_ip].append(now)
+            
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
 @app.before_request
 def track_metrics():
     request.start_time = time.time()
@@ -48,12 +92,24 @@ def log_request(response):
     duration = time.time() - request.start_time
     endpoint = request.endpoint or 'unknown'
     
-    # Track metrics
+    # Track internal metrics
     metrics['request_count'][endpoint] += 1
     metrics['response_times'][endpoint].append(duration)
     
     if response.status_code >= 400:
         metrics['error_count'][endpoint] += 1
+    
+    # Prometheus metrics
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=endpoint,
+        status=response.status_code
+    ).inc()
+    
+    REQUEST_DURATION.labels(
+        method=request.method,
+        endpoint=endpoint
+    ).observe(duration)
     
     # Structured logging
     logger.info(f"Request: {request.method} {request.path} - {response.status_code} - {duration:.3f}s")
@@ -74,35 +130,120 @@ def health():
     })
 
 @app.route('/metrics', methods=['GET'])
+def prometheus_metrics():
+    """Prometheus metrics endpoint"""
+    return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+
+@app.route('/metrics/json', methods=['GET'])
 def get_metrics():
-    """Get basic metrics"""
+    """Get basic metrics in JSON format"""
     return jsonify({
         'request_count': dict(metrics['request_count']),
         'error_count': dict(metrics['error_count']),
         'avg_response_time': {
             endpoint: sum(times) / len(times) if times else 0
             for endpoint, times in metrics['response_times'].items()
-        }
+        },
+        'active_connections': len(rate_limit_storage),
+        'uptime_seconds': time.time() - app.start_time if hasattr(app, 'start_time') else 0
     })
+
+# User storage (use proper database in production)
+USERS = {
+    'admin': {
+        'password_hash': hashlib.sha256(os.getenv('ADMIN_PASSWORD', 'password').encode()).hexdigest(),
+        'role': 'admin'
+    },
+    'operator': {
+        'password_hash': hashlib.sha256(os.getenv('OPERATOR_PASSWORD', 'operator123').encode()).hexdigest(),
+        'role': 'operator'
+    }
+}
 
 # Authentication endpoints
 @app.route('/auth/login', methods=['POST'])
+@rate_limit(max_requests=5, window_seconds=300)  # 5 attempts per 5 minutes
 def login():
-    """Simple login endpoint"""
+    """Secure login endpoint with rate limiting"""
     data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Invalid request'}), 400
+    
     username = data.get('username')
     password = data.get('password')
     
-    # Simple auth (use proper auth in production)
-    if username == 'admin' and password == 'password':
-        access_token = create_access_token(identity=username)
-        return jsonify({'access_token': access_token})
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
     
+    # Verify credentials
+    user = USERS.get(username)
+    if user and user['password_hash'] == hashlib.sha256(password.encode()).hexdigest():
+        access_token = create_access_token(
+            identity=username,
+            additional_claims={'role': user['role']}
+        )
+        
+        logger.info(f"Successful login for user: {username}")
+        return jsonify({
+            'access_token': access_token,
+            'user': username,
+            'role': user['role']
+        })
+    
+    logger.warning(f"Failed login attempt for user: {username}")
     return jsonify({'error': 'Invalid credentials'}), 401
+
+# Telemetry ingestion endpoint
+@app.route('/telemetry/ingest', methods=['POST'])
+@jwt_required()
+@rate_limit(max_requests=1000, window_seconds=60)
+def ingest_telemetry():
+    """Secure telemetry ingestion endpoint"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "invalid json"}), 400
+        
+        required_fields = ['deviceId', 'timestamp', 'location', 'speedKmph', 'acceleration', 'fuelLevel']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"missing field: {field}"}), 400
+        
+        # Validate location structure
+        location = data.get('location', {})
+        if 'lat' not in location or 'lon' not in location:
+            return jsonify({"error": "invalid location format"}), 400
+        
+        # Validate acceleration structure
+        acceleration = data.get('acceleration', {})
+        if not all(key in acceleration for key in ['x', 'y', 'z']):
+            return jsonify({"error": "invalid acceleration format"}), 400
+        
+        # Update metrics
+        TELEMETRY_MESSAGES.inc()
+        
+        # Log telemetry ingestion
+        logger.info(f"Telemetry ingested", extra={
+            'device_id': data['deviceId'],
+            'user': get_jwt_identity(),
+            'timestamp': data['timestamp']
+        })
+        
+        # In production, send to message queue for processing
+        return jsonify({
+            'status': 'accepted',
+            'device_id': data['deviceId'],
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        })
+        
+    except Exception as e:
+        logger.error(f"Telemetry ingestion error: {e}")
+        return jsonify({"error": "internal error"}), 500
 
 # Toll detection and charging
 @app.route('/toll/charge', methods=['POST'])
 @jwt_required()
+@rate_limit(max_requests=100, window_seconds=60)
 def charge_toll():
     """Process toll charge when vehicle crosses gantry"""
     try:
@@ -132,6 +273,9 @@ def charge_toll():
         if blockchain_response.status_code == 200:
             blockchain_data = blockchain_response.json()
             
+            # Update metrics
+            TOLL_TRANSACTIONS.labels(status='success').inc()
+            
             # Log toll event
             logger.info(f"Toll charged", extra={
                 'device_id': data['device_id'],
@@ -152,6 +296,7 @@ def charge_toll():
                 'timestamp': data['timestamp']
             })
         else:
+            TOLL_TRANSACTIONS.labels(status='failed').inc()
             logger.error(f"Blockchain toll charge failed: {blockchain_response.text}")
             return jsonify({"error": "toll charge failed"}), 500
             
@@ -171,6 +316,7 @@ def calculate_toll_amount(vehicle_type):
 # Driver scoring endpoint
 @app.route('/driver_score', methods=['POST'])
 @jwt_required()
+@rate_limit(max_requests=200, window_seconds=60)
 def driver_score():
     """Calculate driver score from telemetry data"""
     try:
@@ -186,6 +332,9 @@ def driver_score():
         
         # Get driver score from ML service
         score_result = predict_score(telemetry)
+        
+        # Update metrics
+        ML_PREDICTIONS.labels(model_type=score_result.get('model', 'unknown')).inc()
         
         # Structured logging with context
         logger.info(f"Driver score request", extra={
@@ -210,6 +359,59 @@ def driver_score():
             'request_id': request.headers.get('X-Request-ID', 'unknown')
         })
         return jsonify({"error": "internal error"}), 500
+
+# WebSocket endpoint for real-time streaming
+@app.route('/ws/telemetry')
+def websocket_telemetry():
+    """WebSocket endpoint for real-time telemetry streaming"""
+    from flask_socketio import SocketIO, emit, join_room, leave_room
+    
+    # This would be implemented with Flask-SocketIO in production
+    return jsonify({
+        'message': 'WebSocket endpoint - use Flask-SocketIO for full implementation',
+        'endpoint': '/ws/telemetry',
+        'events': ['telemetry_update', 'vehicle_status', 'toll_event']
+    })
+
+@app.route('/stream/telemetry', methods=['GET'])
+@jwt_required()
+def stream_telemetry():
+    """Server-sent events endpoint for real-time telemetry"""
+    def generate():
+        # Mock real-time data stream
+        import json
+        import random
+        
+        while True:
+            # Generate mock telemetry data
+            mock_data = {
+                'deviceId': f'DEVICE_{random.randint(1000, 9999)}',
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
+                'location': {
+                    'lat': 20.2961 + random.uniform(-0.01, 0.01),
+                    'lon': 85.8245 + random.uniform(-0.01, 0.01)
+                },
+                'speedKmph': random.uniform(30, 80),
+                'acceleration': {
+                    'x': random.uniform(-2, 2),
+                    'y': random.uniform(-2, 2),
+                    'z': random.uniform(9, 10)
+                },
+                'fuelLevel': random.uniform(20, 100)
+            }
+            
+            yield f"data: {json.dumps(mock_data)}\n\n"
+            time.sleep(1)
+    
+    return app.response_class(
+        generate(),
+        mimetype='text/plain',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*'
+        }
+    )
 
 if __name__ == "__main__":
     app.start_time = time.time()

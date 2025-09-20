@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-time Transportation Dashboard</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        .metric-value {
+            font-weight: bold;
+            color: #007bff;
+        }
+        .status-good { color: #28a745; }
+        .status-warning { color: #ffc107; }
+        .status-danger { color: #dc3545; }
+        .status-connected { color: #28a745; }
+        .status-disconnected { color: #dc3545; }
+        #map {
+            height: 400px;
+            background: #e9ecef;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6c757d;
+            position: relative;
+        }
+        .vehicle-marker {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #007bff;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .vehicle-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .vehicle-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .vehicle-item:last-child {
+            border-bottom: none;
+        }
+        .vehicle-status {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn-success { background: #28a745; }
+        .btn-warning { background: #ffc107; color: #212529; }
+        .btn-danger { background: #dc3545; }
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status status-disconnected" id="connection-status">
+        Disconnected
+    </div>
+    
+    <h1>Smart Transportation System Dashboard</h1>
+    
+    <div class="dashboard">
+        <div class="card">
+            <h3>System Overview</h3>
+            <div class="metric">
+                <span>Active Vehicles</span>
+                <span class="metric-value" id="active-vehicles">0</span>
+            </div>
+            <div class="metric">
+                <span>Total Messages</span>
+                <span class="metric-value" id="total-messages">0</span>
+            </div>
+            <div class="metric">
+                <span>Stream Status</span>
+                <span class="metric-value status-danger" id="stream-status">Disconnected</span>
+            </div>
+            <div class="metric">
+                <span>Last Update</span>
+                <span class="metric-value" id="last-update">Never</span>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>Live Vehicle Map</h3>
+            <div id="map">
+                <div id="map-placeholder">Real-time vehicle positions</div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>Active Vehicles</h3>
+            <div class="vehicle-list" id="vehicle-list">
+                <div class="vehicle-item">
+                    <div>
+                        <strong>No vehicles connected</strong><br>
+                        <small>Waiting for telemetry data...</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>Recent Events</h3>
+            <div id="events-list">
+                <p>No recent events</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card" style="margin-top: 20px; max-width: 1200px; margin-left: auto; margin-right: auto;">
+        <h3>Controls</h3>
+        <button class="btn" onclick="connectStream()">Connect Stream</button>
+        <button class="btn btn-warning" onclick="disconnectStream()">Disconnect</button>
+        <button class="btn btn-success" onclick="refreshData()">Refresh Data</button>
+        <button class="btn" onclick="startSimulation()">Start Simulation</button>
+    </div>
+
+    <script>
+        let vehicles = new Map();
+        let messageCount = 0;
+        let eventSource = null;
+        let isConnected = false;
+        
+        function updateConnectionStatus(connected) {
+            isConnected = connected;
+            const statusElement = document.getElementById('connection-status');
+            const streamStatusElement = document.getElementById('stream-status');
+            
+            if (connected) {
+                statusElement.textContent = 'Connected';
+                statusElement.className = 'connection-status status-connected';
+                streamStatusElement.textContent = 'Connected';
+                streamStatusElement.className = 'metric-value status-good';
+            } else {
+                statusElement.textContent = 'Disconnected';
+                statusElement.className = 'connection-status status-disconnected';
+                streamStatusElement.textContent = 'Disconnected';
+                streamStatusElement.className = 'metric-value status-danger';
+            }
+        }
+        
+        function connectStream() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            // For demo purposes, we'll simulate the stream
+            // In production, this would connect to the actual SSE endpoint
+            addEvent('Attempting to connect to telemetry stream...');
+            
+            // Simulate connection after 1 second
+            setTimeout(() => {
+                updateConnectionStatus(true);
+                addEvent('Connected to telemetry stream');
+                startRealTimeUpdates();
+            }, 1000);
+        }
+        
+        function disconnectStream() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            updateConnectionStatus(false);
+            addEvent('Disconnected from telemetry stream');
+        }
+        
+        function startRealTimeUpdates() {
+            if (!isConnected) return;
+            
+            // Simulate real-time telemetry data
+            setInterval(() => {
+                if (!isConnected) return;
+                
+                const deviceId = `DEVICE_${Math.floor(Math.random() * 100).toString().padStart(3, '0')}`;
+                const telemetryData = {
+                    deviceId: deviceId,
+                    timestamp: new Date().toISOString(),
+                    location: {
+                        lat: 20.2961 + (Math.random() - 0.5) * 0.02,
+                        lon: 85.8245 + (Math.random() - 0.5) * 0.02
+                    },
+                    speedKmph: Math.random() * 80 + 20,
+                    acceleration: {
+                        x: (Math.random() - 0.5) * 4,
+                        y: (Math.random() - 0.5) * 4,
+                        z: 9.8 + (Math.random() - 0.5) * 0.5
+                    },
+                    fuelLevel: Math.random() * 80 + 20
+                };
+                
+                processTelemetryData(telemetryData);
+            }, 2000);
+        }
+        
+        function processTelemetryData(data) {
+            vehicles.set(data.deviceId, {
+                id: data.deviceId,
+                speed: data.speedKmph,
+                fuel: data.fuelLevel,
+                lat: data.location.lat,
+                lon: data.location.lon,
+                acceleration: data.acceleration,
+                lastSeen: new Date(data.timestamp)
+            });
+            
+            messageCount++;
+            updateDashboard();
+            updateMap();
+            
+            // Generate events based on telemetry
+            if (data.speedKmph > 80) {
+                addEvent(`${data.deviceId}: Speed limit exceeded (${data.speedKmph.toFixed(1)} km/h)`);
+            }
+            
+            if (Math.abs(data.acceleration.x) > 3 || Math.abs(data.acceleration.y) > 3) {
+                addEvent(`${data.deviceId}: Harsh driving detected`);
+            }
+            
+            if (data.fuelLevel < 20) {
+                addEvent(`${data.deviceId}: Low fuel warning (${data.fuelLevel.toFixed(1)}%)`);
+            }
+        }
+        
+        function updateDashboard() {
+            document.getElementById('active-vehicles').textContent = vehicles.size;
+            document.getElementById('total-messages').textContent = messageCount;
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            
+            // Update vehicle list
+            const vehicleList = document.getElementById('vehicle-list');
+            if (vehicles.size === 0) {
+                vehicleList.innerHTML = `
+                    <div class="vehicle-item">
+                        <div>
+                            <strong>No vehicles connected</strong><br>
+                            <small>Waiting for telemetry data...</small>
+                        </div>
+                    </div>
+                `;
+            } else {
+                vehicleList.innerHTML = Array.from(vehicles.entries()).map(([id, vehicle]) => `
+                    <div class="vehicle-item">
+                        <div>
+                            <strong>${id}</strong><br>
+                            <small>Speed: ${vehicle.speed.toFixed(1)} km/h | Fuel: ${vehicle.fuel.toFixed(1)}%</small>
+                        </div>
+                        <span class="vehicle-status status-good">Active</span>
+                    </div>
+                `).join('');
+            }
+            
+            // Clean up old vehicles (older than 30 seconds)
+            const now = new Date();
+            for (const [id, vehicle] of vehicles.entries()) {
+                if (now - vehicle.lastSeen > 30000) {
+                    vehicles.delete(id);
+                }
+            }
+        }
+        
+        function updateMap() {
+            const mapElement = document.getElementById('map');
+            const placeholder = document.getElementById('map-placeholder');
+            
+            // Clear existing markers
+            const existingMarkers = mapElement.querySelectorAll('.vehicle-marker');
+            existingMarkers.forEach(marker => marker.remove());
+            
+            if (vehicles.size > 0) {
+                if (placeholder) placeholder.style.display = 'none';
+                
+                // Add vehicle markers
+                vehicles.forEach((vehicle, id) => {
+                    const marker = document.createElement('div');
+                    marker.className = 'vehicle-marker';
+                    marker.title = `${id} - Speed: ${vehicle.speed.toFixed(1)} km/h`;
+                    
+                    // Convert lat/lon to pixel position (simplified)
+                    const mapRect = mapElement.getBoundingClientRect();
+                    const x = ((vehicle.lon - 85.8145) / 0.02) * mapRect.width + mapRect.width / 2;
+                    const y = ((20.3061 - vehicle.lat) / 0.02) * mapRect.height + mapRect.height / 2;
+                    
+                    marker.style.left = Math.max(0, Math.min(mapRect.width - 10, x)) + 'px';
+                    marker.style.top = Math.max(0, Math.min(mapRect.height - 10, y)) + 'px';
+                    
+                    mapElement.appendChild(marker);
+                });
+            } else {
+                if (placeholder) placeholder.style.display = 'block';
+            }
+        }
+        
+        function addEvent(message) {
+            const eventsList = document.getElementById('events-list');
+            const eventDiv = document.createElement('div');
+            eventDiv.className = 'metric';
+            eventDiv.innerHTML = `
+                <span>${new Date().toLocaleTimeString()}</span>
+                <span>${message}</span>
+            `;
+            eventsList.insertBefore(eventDiv, eventsList.firstChild);
+            
+            // Keep only last 10 events
+            while (eventsList.children.length > 10) {
+                eventsList.removeChild(eventsList.lastChild);
+            }
+        }
+        
+        function startSimulation() {
+            if (!isConnected) {
+                connectStream();
+            }
+            addEvent('Real-time simulation started');
+        }
+        
+        function refreshData() {
+            updateDashboard();
+            updateMap();
+            addEvent('Dashboard refreshed');
+        }
+        
+        // Initialize dashboard
+        updateDashboard();
+        addEvent('Dashboard initialized');
+        addEvent('Click "Connect Stream" to start receiving real-time data');
+    </script>
+</body>
+</html>

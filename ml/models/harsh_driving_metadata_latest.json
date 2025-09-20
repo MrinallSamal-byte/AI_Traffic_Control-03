@@ -1,0 +1,35 @@
+{
+  "train_accuracy": 0.972,
+  "test_accuracy": 0.9465,
+  "feature_importance": [
+    {
+      "feature": "jerk",
+      "importance": 0.26029319391505645
+    },
+    {
+      "feature": "speed",
+      "importance": 0.2157947133807549
+    },
+    {
+      "feature": "accel_y",
+      "importance": 0.19350514188967902
+    },
+    {
+      "feature": "yaw",
+      "importance": 0.15150519626241024
+    },
+    {
+      "feature": "accel_x",
+      "importance": 0.13664476330799527
+    },
+    {
+      "feature": "accel_z",
+      "importance": 0.04225699124410397
+    }
+  ],
+  "n_samples": 10000,
+  "model_type": "RandomForestClassifier",
+  "version": "20250920_113327",
+  "created_at": "2025-09-20T11:33:27.984314",
+  "model_path": "c:\\AllinOneWebsite\\Tech Vehicle\\Protopype\\ml\\training\\..\\models\\harsh_driving_model_20250920_113327.pkl"
+}

@@ -14,13 +14,12 @@ class LocationModel(BaseModel):
     altitude: Optional[float] = Field(None, description="Altitude in meters")
 
 class AccelerationModel(BaseModel):
-    x: float = Field(..., description="X-axis acceleration (m/s²)")
-    y: float = Field(..., description="Y-axis acceleration (m/s²)")
-    z: float = Field(..., description="Z-axis acceleration (m/s²)")
+    x: float = Field(..., ge=-50, le=50, description="X-axis acceleration (m/s²)")
+    y: float = Field(..., ge=-50, le=50, description="Y-axis acceleration (m/s²)")
+    z: float = Field(..., ge=-50, le=50, description="Z-axis acceleration (m/s²)")
 
 class EngineDataModel(BaseModel):
     rpm: Optional[float] = Field(None, ge=0, le=10000)
-    fuelLevel: Optional[float] = Field(None, ge=0, le=100)
     engineTemp: Optional[float] = Field(None, ge=-40, le=150)
 
 class DiagnosticsModel(BaseModel):
@@ -32,8 +31,9 @@ class TelemetryModel(BaseModel):
     timestamp: str = Field(..., description="ISO 8601 timestamp")
     location: LocationModel
     speedKmph: float = Field(..., ge=0, le=300, description="Speed in kilometers per hour")
+    acceleration: AccelerationModel = Field(..., description="Required acceleration data")
+    fuelLevel: float = Field(..., ge=0, le=100, description="Fuel level percentage")
     heading: Optional[float] = Field(None, ge=0, le=360, description="Heading in degrees")
-    acceleration: Optional[AccelerationModel] = None
     engineData: Optional[EngineDataModel] = None
     diagnostics: Optional[DiagnosticsModel] = None
 
