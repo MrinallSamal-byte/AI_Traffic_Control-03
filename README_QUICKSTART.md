@@ -1,222 +1,106 @@
-# Smart Transportation System - Quick Start Guide
+# Smart Transportation System - MVP Quickstart
 
-## 🚀 One-Command Startup
+This guide shows how to run the local ML model + API + simulator demo.
 
+## Prerequisites
+
+- Python 3.8+
+- Git
+
+## Quick Setup
+
+1. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Train the ML model**:
+   ```bash
+   python ml_services/train_model.py
+   ```
+   Expected output:
+   ```
+   Generating synthetic training data...
+   Training RandomForest model...
+   Train R²: 0.9xxx
+   Test R²: 0.8xxx
+   Model saved to ml_services/model.pkl
+   ```
+
+3. **Start the API server**:
+   ```bash
+   python api_server/app.py
+   ```
+   Server will start on http://localhost:5000
+
+4. **Run the device simulator** (in a new terminal):
+   ```bash
+   python device_simulator/simulator.py --devices 3
+   ```
+   Expected output:
+   ```
+   12:34:56 | OBU-abc123 -> score=45.67 model=random_forest
+   12:34:57 | OBU-def456 -> score=23.45 model=random_forest
+   ```
+
+5. **View the dashboard**:
+   ```bash
+   python -m http.server 3000
+   ```
+   Then open: http://localhost:3000/dashboard/simple_demo.html
+
+## API Endpoints
+
+- `GET /health` → `{"status":"ok", "service":"api_server"}`
+- `POST /driver_score` → Accepts telemetry JSON, returns driver score
+
+## Testing
+
+Run the unit tests:
 ```bash
-python start_system.py
+python tests/test_api_driver_score.py
 ```
 
-This will automatically:
-- Start all infrastructure services (MQTT, Kafka, PostgreSQL, Redis, Blockchain)
-- Launch application services (API, ML, Stream Processor)
-- Start vehicle simulators
-- Serve the web dashboard
-
-## 📊 Access Points
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| **Web Dashboard** | http://localhost:3000 | Real-time vehicle tracking & monitoring |
-| **API Server** | http://localhost:5000 | REST API endpoints |
-| **ML Service** | http://localhost:5001 | Driver scoring & predictions |
-| **Blockchain** | http://localhost:5002 | Smart contract interface |
-| **Database** | localhost:5432 | PostgreSQL + TimescaleDB |
-| **MQTT Broker** | localhost:1883 | Device telemetry ingestion |
-
-## 🧪 Run Tests
-
+Or with pytest:
 ```bash
-python test_system.py
+pytest tests/test_api_driver_score.py -v
 ```
 
-## 📱 Key Features Demonstrated
+## Expected Demo Flow
 
-### 1. Vehicle Edge Simulation
-- **3 simulated vehicles** publishing real-time telemetry
-- GPS coordinates, speed, acceleration, CAN bus data
-- Harsh driving event detection (braking, acceleration)
+1. Simulator sends telemetry to API every second
+2. API calculates driver score using ML model
+3. Console shows: `timestamp | device_id -> score=XX.XX model=random_forest`
+4. Dashboard displays real-time scores and statistics
 
-### 2. Real-Time Data Pipeline
-- **MQTT → Kafka → Stream Processing → Database**
-- Message validation and enrichment
-- Event detection and alerting
+## Troubleshooting
 
-### 3. AI/ML Driver Scoring
-- **RandomForest model** for behavior analysis
-- Real-time scoring based on driving patterns
-- Event classification (harsh brake, acceleration, speeding)
+- **Model not found**: Run `python ml_services/train_model.py` first
+- **API connection failed**: Check if API server is running on port 5000
+- **Dashboard not loading**: Use `python -m http.server 3000` to serve files
 
-### 4. Blockchain Toll Management
-- **Smart contracts** for toll payments
-- Automated charging based on gantry crossings
-- Immutable transaction records
+## Sample Telemetry Format
 
-### 5. Interactive Dashboard
-- **Live map** with vehicle positions
-- Real-time event notifications
-- System health monitoring
-- Traffic analytics
-
-## 🏗️ Architecture Components
-
-```
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   Vehicle Edge  │───▶│ MQTT Broker  │───▶│ Stream Process  │
-│ (3 Simulators)  │    │   (Kafka)    │    │   (Flink)       │
-└─────────────────┘    └──────────────┘    └─────────────────┘
-                                                     │
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   Blockchain    │◀───│  API Gateway │◀───│   Data Layer    │
-│ (Smart Contract)│    │   (Flask)    │    │ (Postgres/TS)   │
-└─────────────────┘    └──────────────┘    └─────────────────┘
-                                │
-                       ┌─────────────────┐
-                       │   ML Services   │
-                       │ (Driver Score)  │
-                       └─────────────────┘
+```json
+{
+  "device_id": "OBU-123",
+  "timestamp": 1640995200,
+  "speed": 50.0,
+  "accel_x": 1.2,
+  "accel_y": 0.3,
+  "accel_z": 9.8,
+  "jerk": 0.5,
+  "yaw": 0.02
+}
 ```
 
-## 📋 Sample API Usage
+## Sample API Response
 
-### Authentication
-```bash
-# Register user
-curl -X POST http://localhost:5000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"name":"John Doe","email":"john@example.com"}'
-
-# Response includes access_token for subsequent requests
+```json
+{
+  "device_id": "OBU-123",
+  "timestamp": 1640995200,
+  "driver_score": 45.67,
+  "model": "random_forest"
+}
 ```
-
-### Vehicle Management
-```bash
-# Register vehicle
-curl -X POST http://localhost:5000/api/v1/devices/register \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"registration_no":"ABC123","obu_device_id":"OBU-001"}'
-```
-
-### Get Driver Score
-```bash
-curl -X GET http://localhost:5000/api/v1/vehicles/VEHICLE_ID/score \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-### Toll Operations
-```bash
-# Get toll gantries
-curl -X GET http://localhost:5000/api/v1/toll/gantries
-
-# Process toll charge
-curl -X POST http://localhost:5000/api/v1/toll/charge \
-  -H "Content-Type: application/json" \
-  -d '{"vehicleId":"VID-123","gantryId":"G-001","calculatedPrice":25.00}'
-```
-
-## 🔧 Manual Service Control
-
-If you prefer to start services individually:
-
-```bash
-# 1. Start infrastructure
-docker-compose up -d
-
-# 2. Start stream processor
-python stream_processor/processor.py
-
-# 3. Start ML service
-python ml_services/driver_scoring.py
-
-# 4. Start API server
-python api_server/app.py
-
-# 5. Start blockchain service
-python blockchain/blockchain_service.py
-
-# 6. Start vehicle simulators
-python device_simulator/simulator.py --count 3
-
-# 7. Serve dashboard
-cd dashboard && python -m http.server 3000
-```
-
-## 📊 Dashboard Features
-
-### Real-Time Map
-- **Live vehicle tracking** with GPS coordinates
-- **Toll gantry locations** marked on map
-- **Event markers** for incidents (harsh braking, etc.)
-- **Click vehicles** to see detailed telemetry
-
-### System Monitoring
-- **Active vehicle count** and status
-- **Daily revenue** from toll collections
-- **Alert notifications** for driving events
-- **Service health** indicators
-
-### Data Analytics
-- **Driver behavior scores** trending
-- **Traffic pattern analysis**
-- **Revenue reporting**
-- **Incident tracking**
-
-## 🛠️ Development Notes
-
-### Database Schema
-- **Users, Vehicles, Wallets** - Core entities
-- **Telemetry** - TimescaleDB hypertable for time-series data
-- **Events** - Driving incidents and alerts
-- **Toll Transactions** - Payment records
-
-### MQTT Topics
-```
-/org/{orgId}/device/{deviceId}/telemetry  # Vehicle data
-/org/{orgId}/device/{deviceId}/events     # Driving events
-/org/{orgId}/device/{deviceId}/v2x        # V2X messages
-/org/{orgId}/toll/{gantryId}/enter        # Toll entry
-```
-
-### ML Model Features
-- Speed statistics (mean, std, max)
-- Acceleration patterns (harsh events)
-- Temporal features (time of day, day of week)
-- Driving smoothness (jerk calculations)
-
-## 🔒 Security Features
-
-- **JWT authentication** for API access
-- **Message signatures** for telemetry validation
-- **Blockchain immutability** for toll records
-- **Input validation** and sanitization
-
-## 📈 Scalability Considerations
-
-- **Kafka partitioning** for high-throughput telemetry
-- **TimescaleDB** for efficient time-series storage
-- **Microservices architecture** for independent scaling
-- **Container deployment** ready for Kubernetes
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-1. **Port conflicts**: Ensure ports 1883, 5000-5002, 3000, 5432, 6379, 8545 are available
-2. **Docker not running**: Start Docker Desktop before running the system
-3. **Permission errors**: Run with appropriate permissions for Docker access
-4. **Service startup delays**: Allow 30-60 seconds for all services to initialize
-
-### Logs and Debugging
-
-- **Service logs**: Check console output for each service
-- **Database logs**: `docker-compose logs timescaledb`
-- **MQTT logs**: `docker-compose logs mosquitto`
-- **Test reports**: Generated in `test_report.json`
-
-## 🎯 Next Steps for Production
-
-1. **Security hardening**: Implement proper authentication, encryption
-2. **Monitoring**: Add Prometheus/Grafana for metrics
-3. **CI/CD**: Set up automated testing and deployment
-4. **Load testing**: Validate performance under realistic loads
-5. **Documentation**: API documentation with OpenAPI/Swagger

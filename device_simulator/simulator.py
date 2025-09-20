@@ -258,7 +258,10 @@ class VehicleSimulator:
                         )
                         if response.status_code == 200:
                             result = response.json()
-                            print(f"📡 {self.device_id}: Speed {telemetry['speed']} km/h -> Score: {result.get('driver_score', 'N/A'):.1f} ({result.get('model', 'unknown')})")
+                            timestamp = datetime.utcnow().strftime('%H:%M:%S')
+                            score = result.get('driver_score', 0)
+                            model = result.get('model', 'unknown')
+                            print(f"{timestamp} | {self.device_id} -> score={score:.2f} model={model}")
                         else:
                             print(f"❌ {self.device_id}: HTTP error {response.status_code}")
                     except Exception as e:
