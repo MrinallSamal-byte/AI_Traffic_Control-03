@@ -14,6 +14,7 @@ from datetime import datetime
 import paho.mqtt.client as mqtt
 import requests
 import argparse
+from geopy.distance import geodesic
 
 class VehicleSimulator:
     def __init__(self, device_id=None, broker_host="localhost", broker_port=1883, mode="mqtt", api_url="http://localhost:5000"):
@@ -39,6 +40,14 @@ class VehicleSimulator:
         self.target_speed = 50.0
         self.route_points = self._generate_route()
         self.current_route_index = 0
+        
+        # Toll gantry locations
+        self.toll_gantries = [
+            {'id': 1, 'lat': 20.2961, 'lon': 85.8245, 'radius': 50},  # 50m radius
+            {'id': 2, 'lat': 20.3000, 'lon': 85.8300, 'radius': 50},
+            {'id': 3, 'lat': 20.2900, 'lon': 85.8200, 'radius': 50}
+        ]
+        self.last_gantry_trigger = {}
         
         # Setup MQTT callbacks
         if self.client:
@@ -234,6 +243,63 @@ class VehicleSimulator:
             self.client.publish(topic, json.dumps(event))
             print(f"🚨 Event: {event_type} at {telemetry['speedKmph']} km/h")
     
+    def _check_toll_gantries(self):
+        """Check if vehicle is near toll gantries and trigger toll events"""
+        if self.mode != "mqtt":
+            return  # Only for MQTT mode
+            
+        current_pos = (self.latitude, self.longitude)
+        
+        for gantry in self.toll_gantries:
+            gantry_pos = (gantry['lat'], gantry['lon'])
+            distance = geodesic(current_pos, gantry_pos).meters
+            
+            if distance <= gantry['radius']:
+                # Check if we haven't triggered this gantry recently
+                last_trigger = self.last_gantry_trigger.get(gantry['id'], 0)
+                if time.time() - last_trigger > 300:  # 5 minutes cooldown
+                    self._trigger_toll_event(gantry['id'])
+                    self.last_gantry_trigger[gantry['id']] = time.time()
+    
+    def _trigger_toll_event(self, gantry_id):
+        """Trigger toll charging event"""
+        try:
+            # Get auth token (simplified)
+            auth_response = requests.post('http://localhost:5000/auth/login', json={
+                'username': 'admin',
+                'password': 'password'
+            }, timeout=5)
+            
+            if auth_response.status_code == 200:
+                token = auth_response.json()['access_token']
+                headers = {'Authorization': f'Bearer {token}'}
+                
+                # Trigger toll charge
+                toll_data = {
+                    'device_id': self.device_id,
+                    'gantry_id': gantry_id,
+                    'location': {'lat': self.latitude, 'lon': self.longitude},
+                    'timestamp': datetime.utcnow().isoformat() + 'Z',
+                    'vehicle_type': 'car'
+                }
+                
+                toll_response = requests.post(
+                    'http://localhost:5000/toll/charge',
+                    json=toll_data,
+                    headers=headers,
+                    timeout=5
+                )
+                
+                if toll_response.status_code == 200:
+                    toll_result = toll_response.json()
+                    print(f"💰 Toll charged: {self.device_id} at gantry {gantry_id}, "
+                          f"amount: ${toll_result.get('amount', 0):.2f}")
+                else:
+                    print(f"❌ Toll charge failed: {toll_response.status_code}")
+            
+        except Exception as e:
+            print(f"❌ Toll event error: {e}")
+    
     def start_simulation(self, interval=1.0):
         """Start telemetry simulation"""
         self.running = True
@@ -275,6 +341,9 @@ class VehicleSimulator:
                     
                     # Check for events (MQTT only)
                     self._check_events(telemetry)
+                    
+                    # Check for toll gantries
+                    self._check_toll_gantries()
                 
                 time.sleep(interval)
                 

@@ -15,6 +15,8 @@ from psycopg2.extras import RealDictCursor
 import redis
 import logging
 from collections import defaultdict, deque
+from pydantic import ValidationError
+from schemas import TelemetryModel, EventModel, V2XModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -127,7 +129,7 @@ class StreamProcessor:
             self._send_to_dlq(msg.payload, f"Processing error: {e}", device_id)
     
     def _validate_and_enrich(self, payload, message_type, device_id):
-        """Validate message and add enrichment data"""
+        """Validate message using Pydantic models and add enrichment data"""
         try:
             # Basic validation
             if not payload.get('timestamp'):
@@ -136,13 +138,28 @@ class StreamProcessor:
             if not payload.get('deviceId'):
                 payload['deviceId'] = device_id
             
-            # Message type specific validation
+            # Message type specific validation using Pydantic
             if message_type == 'telemetry':
-                return self._validate_telemetry(payload)
+                try:
+                    validated = TelemetryModel(**payload)
+                    return self._enrich_telemetry(validated.dict())
+                except ValidationError as e:
+                    logger.warning(f"Telemetry validation failed: {e}")
+                    return None
             elif message_type == 'events':
-                return self._validate_event(payload)
+                try:
+                    validated = EventModel(**payload)
+                    return self._enrich_event(validated.dict())
+                except ValidationError as e:
+                    logger.warning(f"Event validation failed: {e}")
+                    return None
             elif message_type == 'v2x':
-                return self._validate_v2x(payload)
+                try:
+                    validated = V2XModel(**payload)
+                    return self._enrich_v2x(validated.dict())
+                except ValidationError as e:
+                    logger.warning(f"V2X validation failed: {e}")
+                    return None
             
             return payload
             
@@ -150,24 +167,9 @@ class StreamProcessor:
             logger.error(f"✗ Validation error: {e}")
             return None
     
-    def _validate_telemetry(self, payload):
-        """Validate telemetry message"""
-        required_fields = ['deviceId', 'timestamp', 'location', 'speedKmph']
-        
-        for field in required_fields:
-            if field not in payload:
-                logger.warning(f"Missing required field: {field}")
-                return None
-        
-        # Validate location
-        location = payload.get('location', {})
-        if not (-90 <= location.get('lat', 0) <= 90):
-            logger.warning("Invalid latitude")
-            return None
-        
-        if not (-180 <= location.get('lon', 0) <= 180):
-            logger.warning("Invalid longitude")
-            return None
+    def _enrich_telemetry(self, payload):
+        """Enrich validated telemetry message"""
+        location = payload['location']
         
         # Add enrichment
         payload['processed_at'] = datetime.utcnow().isoformat() + 'Z'
@@ -189,30 +191,16 @@ class StreamProcessor:
         
         return payload
     
-    def _validate_event(self, payload):
-        """Validate event message"""
-        required_fields = ['eventType', 'deviceId', 'timestamp']
-        
-        for field in required_fields:
-            if field not in payload:
-                logger.warning(f"Missing required field: {field}")
-                return None
-        
+    def _enrich_event(self, payload):
+        """Enrich validated event message"""
         # Add enrichment
         payload['processed_at'] = datetime.utcnow().isoformat() + 'Z'
         payload['severity'] = self._calculate_event_severity(payload)
         
         return payload
     
-    def _validate_v2x(self, payload):
-        """Validate V2X message"""
-        required_fields = ['type', 'deviceId', 'pos']
-        
-        for field in required_fields:
-            if field not in payload:
-                logger.warning(f"Missing required field: {field}")
-                return None
-        
+    def _enrich_v2x(self, payload):
+        """Enrich validated V2X message"""
         # Add enrichment
         payload['processed_at'] = datetime.utcnow().isoformat() + 'Z'
         payload['ttl_expires_at'] = datetime.utcnow().timestamp() + payload.get('ttl_seconds', 5)
@@ -494,6 +482,26 @@ class StreamProcessor:
         
         self.mqtt_client.loop_forever()
 
+# Health endpoint for stream processor
+from flask import Flask
+from flask_cors import CORS
+import threading
+
+def create_health_server():
+    """Create health check server for stream processor"""
+    health_app = Flask(__name__)
+    CORS(health_app)
+    
+    @health_app.route('/health', methods=['GET'])
+    def health():
+        return {
+            'status': 'healthy',
+            'service': 'stream_processor',
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }
+    
+    return health_app
+
 if __name__ == "__main__":
     config = {
         'mqtt': {
@@ -520,6 +528,15 @@ if __name__ == "__main__":
     }
     
     processor = StreamProcessor(config)
+    
+    # Start health server in background
+    health_app = create_health_server()
+    health_thread = threading.Thread(
+        target=lambda: health_app.run(host='0.0.0.0', port=5004, debug=False),
+        daemon=True
+    )
+    health_thread.start()
+    logger.info("✓ Health server started on port 5004")
     
     try:
         processor.start()
